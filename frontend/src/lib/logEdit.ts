@@ -121,8 +121,6 @@ export function draftLog(base: DailyLog, entries: LogEntry[], miles: number, pre
     entries,
     miles,
     totals: totals(entries),
-    from: entries[0]?.location || base.from,
-    to: entries[entries.length - 1]?.location || base.to,
     remarks: entries
       .filter((e, i) => !(i === 0 && (base.index === 0 || e.status === previousStatus)))
       .map((e) => ({ minute: e.start, end_minute: e.end, status: e.status, kind: e.kind, location: e.location, note: e.note })),

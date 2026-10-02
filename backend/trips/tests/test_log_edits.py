@@ -94,6 +94,16 @@ class LogEditApiTests(TestCase):
         self.assertNotIn("edit", reverted["logs"][0])
         self.assertFalse(reverted["edited"])
 
+    def test_header_fields_are_saved(self):
+        response = self.put(
+            entries_of(self.trip["logs"][0]),
+            from_place="Joliet Terminal, IL",
+            to_place="Victor, IA",
+            total_mileage=640,
+        )
+        log = response.json()["logs"][0]
+        self.assertEqual((log["from"], log["to"], log["total_mileage"], log["miles"]), ("Joliet Terminal, IL", "Victor, IA", 640, 500))
+
     def test_driver_details_are_saved_with_the_edit(self):
         response = self.put(entries_of(self.trip["logs"][0]), driver={"name": "Rosa Delgado", "carrier": "Prairie Line"})
         self.assertEqual(response.json()["inputs"]["driver"]["carrier"], "Prairie Line")

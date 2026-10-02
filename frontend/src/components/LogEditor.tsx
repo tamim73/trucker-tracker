@@ -9,6 +9,9 @@ import { DAY, fromTimeValue, moveBoundary, removeEntry, setStatus, STEP, toTimeV
 export interface Draft {
   entries: LogEntry[]
   miles: string
+  totalMileage: string
+  from: string
+  to: string
   reason: string
   driver: DriverDetails
 }
@@ -248,11 +251,20 @@ export function LogEditor({ draft, onChange, onSnapshot, preview, previewing, re
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-4 py-3 hover:bg-softer [&::-webkit-details-marker]:hidden">
             <span>
               <span className="block text-[15px] font-medium">Sheet header</span>
-              <span className="block text-[13px] text-body">Driver, carrier and equipment. Applies to every sheet.</span>
+              <span className="block text-[13px] text-body">Also editable on the sheet. Driver, carrier and equipment apply to every sheet.</span>
             </span>
             <CaretDownIcon size={18} weight="bold" className="shrink-0 transition-transform duration-200 group-open:rotate-180" aria-hidden />
           </summary>
           <div className="flex flex-col gap-3 px-4 pt-1 pb-4">
+            <HeaderField label="From" placeholder="City, ST…" value={draft.from} onChange={(from) => onChange({ ...draft, from })} />
+            <HeaderField label="To" placeholder="City, ST…" value={draft.to} onChange={(to) => onChange({ ...draft, to })} />
+            <HeaderField
+              label="Total mileage today"
+              placeholder="Every mile the vehicle moved…"
+              value={draft.totalMileage}
+              inputMode="decimal"
+              onChange={(totalMileage) => onChange({ ...draft, totalMileage })}
+            />
             {DRIVER_FIELDS.map((field) => (
               <HeaderField
                 key={field.key}
@@ -269,7 +281,19 @@ export function LogEditor({ draft, onChange, onSnapshot, preview, previewing, re
   )
 }
 
-function HeaderField({ label, placeholder, value, onChange }: { label: string; placeholder: string; value: string; onChange: (v: string) => void }) {
+function HeaderField({
+  label,
+  placeholder,
+  value,
+  onChange,
+  inputMode,
+}: {
+  label: string
+  placeholder: string
+  value: string
+  onChange: (v: string) => void
+  inputMode?: 'decimal'
+}) {
   const id = useId()
   return (
     <div className="flex flex-col gap-1.5">
@@ -279,6 +303,7 @@ function HeaderField({ label, placeholder, value, onChange }: { label: string; p
       <input
         id={id}
         type="text"
+        inputMode={inputMode}
         autoComplete="off"
         maxLength={160}
         placeholder={placeholder}

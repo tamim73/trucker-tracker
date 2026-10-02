@@ -85,7 +85,17 @@ def refresh_result(result: dict) -> None:
     result["edited"] = any("edit" in log for log in result["logs"])
 
 
-def apply_edit(result: dict, day: int, entries: list[dict], miles: float, reason: str) -> None:
+def apply_edit(
+    result: dict,
+    day: int,
+    entries: list[dict],
+    miles: float,
+    reason: str,
+    *,
+    from_place: str | None = None,
+    to_place: str | None = None,
+    total_mileage: float | None = None,
+) -> None:
     logs = result["logs"]
     if not 0 <= day < len(logs):
         raise EditError("That day is not part of this trip.")
@@ -93,8 +103,10 @@ def apply_edit(result: dict, day: int, entries: list[dict], miles: float, reason
     log = logs[day]
     log["entries"] = normalize_entries(entries)
     log["miles"] = round(miles, 1)
-    log["from"] = log["entries"][0]["location"] or log["from"]
-    log["to"] = log["entries"][-1]["location"] or log["to"]
+    # Total mileage counts every mile the vehicle moved, so it can exceed this driver's miles.
+    log["total_mileage"] = round(total_mileage if total_mileage is not None else miles, 1)
+    log["from"] = (from_place or "").strip() or log["entries"][0]["location"] or log["from"]
+    log["to"] = (to_place or "").strip() or log["entries"][-1]["location"] or log["to"]
     log["edit"] = {"reason": reason.strip(), "edited_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     refresh_result(result)
 

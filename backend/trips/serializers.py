@@ -51,5 +51,8 @@ class LogEntrySerializer(serializers.Serializer):
 class LogEditSerializer(serializers.Serializer):
     entries = LogEntrySerializer(many=True, min_length=1, max_length=96)
     miles = serializers.FloatField(min_value=0, max_value=1500)
+    total_mileage = serializers.FloatField(min_value=0, max_value=1500, required=False, allow_null=True)
+    from_place = serializers.CharField(max_length=120, required=False, allow_blank=True)
+    to_place = serializers.CharField(max_length=120, required=False, allow_blank=True)
     reason = serializers.CharField(min_length=3, max_length=200, trim_whitespace=True)
     driver = DriverSerializer(required=False)

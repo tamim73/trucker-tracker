@@ -77,6 +77,15 @@ export interface SheetEditing {
   onNudgeSegment: (index: number, direction: 1 | -1) => void
 }
 
+export type DayField = 'from' | 'to' | 'miles' | 'totalMileage'
+
+/** Header and shipping fields typed straight onto the sheet. */
+export interface HeaderEditing {
+  day: Record<DayField, string>
+  onDayChange: (field: DayField, value: string) => void
+  onDriverChange: (field: keyof DriverDetails, value: string) => void
+}
+
 interface Props {
   log: DailyLog
   driver: DriverDetails
@@ -84,6 +93,43 @@ interface Props {
   animate?: boolean
   highlight?: number | null
   editing?: SheetEditing
+  header?: HeaderEditing
+}
+
+interface FieldEdit {
+  value: string
+  onChange: (value: string) => void
+  label: string
+  numeric?: boolean
+}
+
+function SheetInput({ x, y, width, height, edit, size = 15, align = 'left', weight = 500 }: {
+  x: number
+  y: number
+  width: number
+  height: number
+  edit: FieldEdit
+  size?: number
+  align?: 'left' | 'center'
+  weight?: number
+}) {
+  return (
+    <foreignObject x={x} y={y} width={width} height={height}>
+      <input
+        type="text"
+        inputMode={edit.numeric ? 'decimal' : undefined}
+        autoComplete="off"
+        spellCheck={false}
+        maxLength={edit.numeric ? 7 : 160}
+        aria-label={edit.label}
+        placeholder={edit.label}
+        value={edit.value}
+        onChange={(e) => edit.onChange(e.target.value)}
+        className="sheet-input"
+        style={{ fontSize: size, textAlign: align, fontWeight: weight }}
+      />
+    </foreignObject>
+  )
 }
 
 interface RemarkGroup {
@@ -127,11 +173,29 @@ function dutyPath(log: DailyLog) {
   return d
 }
 
-function Field({ x1, x2, y, value, label, align = 'start' }: { x1: number; x2: number; y: number; value?: string; label: string; align?: 'start' | 'middle' }) {
+function Field({
+  x1,
+  x2,
+  y,
+  value,
+  label,
+  align = 'start',
+  edit,
+}: {
+  x1: number
+  x2: number
+  y: number
+  value?: string
+  label: string
+  align?: 'start' | 'middle'
+  edit?: FieldEdit
+}) {
   const vx = align === 'middle' ? (x1 + x2) / 2 : x1 + 6
   return (
     <g>
-      {value ? (
+      {edit ? (
+        <SheetInput x={x1} y={y - 25} width={x2 - x1} height={23} edit={edit} />
+      ) : value ? (
         <text x={vx} y={y - 6} fill={PEN} fontSize={15} fontWeight={500} textAnchor={align}>
           {value}
         </text>
@@ -144,13 +208,17 @@ function Field({ x1, x2, y, value, label, align = 'start' }: { x1: number; x2: n
   )
 }
 
-function Box({ x1, y1, w, h, value, label }: { x1: number; y1: number; w: number; h: number; value: string; label: ReactNode }) {
+function Box({ x1, y1, w, h, value, label, edit }: { x1: number; y1: number; w: number; h: number; value: string; label: ReactNode; edit?: FieldEdit }) {
   return (
     <g>
       <rect x={x1} y={y1} width={w} height={h} fill="none" stroke={RULE} strokeWidth={1} />
-      <text x={x1 + w / 2} y={y1 + h / 2 + 6} fill={PEN} fontSize={17} fontWeight={600} textAnchor="middle">
-        {value}
-      </text>
+      {edit ? (
+        <SheetInput x={x1 + 3} y={y1 + 3} width={w - 6} height={h - 6} edit={edit} size={17} align="center" weight={600} />
+      ) : (
+        <text x={x1 + w / 2} y={y1 + h / 2 + 6} fill={PEN} fontSize={17} fontWeight={600} textAnchor="middle">
+          {value}
+        </text>
+      )}
       <text x={x1 + w / 2} y={y1 + h + 13} fill={PRINT} fontSize={10.5} textAnchor="middle">
         {label}
       </text>
@@ -158,7 +226,11 @@ function Box({ x1, y1, w, h, value, label }: { x1: number; y1: number; w: number
   )
 }
 
-export const LogSheet = memo(function LogSheet({ log, driver, dayCount, animate = true, highlight, editing }: Props) {
+export const LogSheet = memo(function LogSheet({ log, driver, dayCount, animate = true, highlight, editing, header }: Props) {
+  const dayEdit = (field: DayField, label: string, numeric = false): FieldEdit | undefined =>
+    header && { value: header.day[field], onChange: (v) => header.onDayChange(field, v), label, numeric }
+  const driverEdit = (field: keyof DriverDetails, label: string): FieldEdit | undefined =>
+    header && { value: driver[field], onChange: (v) => header.onDriverChange(field, v), label }
   const [year, month, day] = log.date.split('-')
   const groups = groupRemarks(log.remarks)
   const stops = log.entries.filter((e) => e.status !== 'driving' && !(e.kind === 'off_duty'))
@@ -206,7 +278,7 @@ export const LogSheet = memo(function LogSheet({ log, driver, dayCount, animate 
       <text x={W - 24} y={66} fill={FAINT} fontSize={11} textAnchor="end">
         Sheet {log.index + 1} of {dayCount}
       </text>
-      {log.edit && (
+      {log.edit && !header && (
         <text x={W - 24} y={84} fill={PEN} fontSize={11} fontWeight={500} textAnchor="end">
           Edited by driver: {log.edit.reason.length > 60 ? `${log.edit.reason.slice(0, 59)}…` : log.edit.reason}
         </text>
@@ -216,32 +288,60 @@ export const LogSheet = memo(function LogSheet({ log, driver, dayCount, animate 
         From:
       </text>
       <line x1={66} x2={530} y1={104} y2={104} stroke={RULE} />
-      <text x={72} y={98} fill={PEN} fontSize={15} fontWeight={500}>
-        {log.from}
-      </text>
+      {header ? (
+        <SheetInput x={66} y={79} width={464} height={23} edit={dayEdit('from', 'From')!} />
+      ) : (
+        <text x={72} y={98} fill={PEN} fontSize={15} fontWeight={500}>
+          {log.from}
+        </text>
+      )}
       <text x={556} y={102} fill={PRINT} fontSize={13} fontWeight={600}>
         To:
       </text>
       <line x1={584} x2={W - 24} y1={104} y2={104} stroke={RULE} />
-      <text x={590} y={98} fill={PEN} fontSize={15} fontWeight={500}>
-        {log.to}
-      </text>
+      {header ? (
+        <SheetInput x={584} y={79} width={W - 24 - 584} height={23} edit={dayEdit('to', 'To')!} />
+      ) : (
+        <text x={590} y={98} fill={PEN} fontSize={15} fontWeight={500}>
+          {log.to}
+        </text>
+      )}
 
-      <Box x1={24} y1={124} w={150} h={42} value={formatNumber(Math.round(log.miles))} label="Total Miles Driving Today" />
-      <Box x1={186} y1={124} w={150} h={42} value={formatNumber(Math.round(log.miles))} label="Total Mileage Today" />
+      <Box
+        x1={24}
+        y1={124}
+        w={150}
+        h={42}
+        value={formatNumber(Math.round(log.miles))}
+        label="Total Miles Driving Today"
+        edit={dayEdit('miles', 'Total miles driving today', true)}
+      />
+      <Box
+        x1={186}
+        y1={124}
+        w={150}
+        h={42}
+        value={formatNumber(Math.round(log.total_mileage ?? log.miles))}
+        label="Total Mileage Today"
+        edit={dayEdit('totalMileage', 'Total mileage today', true)}
+      />
       <rect x={24} y={190} width={312} height={34} fill="none" stroke={RULE} />
-      <text x={180} y={212} fill={PEN} fontSize={14} fontWeight={500} textAnchor="middle">
-        {driver.vehicle_numbers || ''}
-      </text>
+      {header ? (
+        <SheetInput x={27} y={193} width={306} height={28} edit={driverEdit('vehicle_numbers', 'Truck and trailer numbers')!} size={14} align="center" />
+      ) : (
+        <text x={180} y={212} fill={PEN} fontSize={14} fontWeight={500} textAnchor="middle">
+          {driver.vehicle_numbers || ''}
+        </text>
+      )}
       <text x={180} y={237} fill={PRINT} fontSize={10} textAnchor="middle">
         Truck/Tractor and Trailer Numbers or License Plate(s)/State (show each unit)
       </text>
 
-      <Field x1={366} x2={W - 24} y={146} value={driver.carrier} label="Name of Carrier or Carriers" />
-      <Field x1={366} x2={720} y={190} value={driver.main_office} label="Main Office Address" />
-      <Field x1={740} x2={W - 24} y={190} value={driver.home_terminal} label="Home Terminal Address" />
-      <Field x1={366} x2={720} y={226} value={driver.name} label="Driver" />
-      <Field x1={740} x2={W - 24} y={226} value={driver.co_driver} label="Name of Co-Driver" />
+      <Field x1={366} x2={W - 24} y={146} value={driver.carrier} label="Name of Carrier or Carriers" edit={driverEdit('carrier', 'Carrier')} />
+      <Field x1={366} x2={720} y={190} value={driver.main_office} label="Main Office Address" edit={driverEdit('main_office', 'Main office address')} />
+      <Field x1={740} x2={W - 24} y={190} value={driver.home_terminal} label="Home Terminal Address" edit={driverEdit('home_terminal', 'Home terminal address')} />
+      <Field x1={366} x2={720} y={226} value={driver.name} label="Driver" edit={driverEdit('name', 'Driver name')} />
+      <Field x1={740} x2={W - 24} y={226} value={driver.co_driver} label="Name of Co-Driver" edit={driverEdit('co_driver', 'Co-driver name')} />
 
       {/* Hour band */}
       <rect x={24} y={GT - 30} width={W - 48} height={30} fill={PRINT} />
@@ -384,8 +484,8 @@ export const LogSheet = memo(function LogSheet({ log, driver, dayCount, animate 
       <text x={24} y={672} fill={PRINT} fontSize={12.5} fontWeight={700}>
         Shipping Documents:
       </text>
-      <Field x1={24} x2={330} y={710} value={driver.shipping_document} label="DVL or Manifest No." />
-      <Field x1={350} x2={720} y={710} value={driver.commodity} label="Shipper & Commodity" />
+      <Field x1={24} x2={330} y={710} value={driver.shipping_document} label="DVL or Manifest No." edit={driverEdit('shipping_document', 'Shipping document number')} />
+      <Field x1={350} x2={720} y={710} value={driver.commodity} label="Shipper & Commodity" edit={driverEdit('commodity', 'Shipper and commodity')} />
       <text x={740} y={688} fill={PRINT} fontSize={10.5}>
         <tspan x={740}>Enter name of place you reported and where released</tspan>
         <tspan x={740} dy={14}>from work and when and where each change of duty</tspan>

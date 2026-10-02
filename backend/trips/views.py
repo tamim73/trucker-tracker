@@ -77,7 +77,16 @@ def trip_detail(request, trip_id):
 def _edited_copy(trip: Trip, day: int, data) -> tuple[dict, dict]:
     result = copy.deepcopy(trip.result)
     inputs = copy.deepcopy(trip.inputs)
-    apply_edit(result, day, data["entries"], data["miles"], data["reason"])
+    apply_edit(
+        result,
+        day,
+        data["entries"],
+        data["miles"],
+        data["reason"],
+        from_place=data.get("from_place"),
+        to_place=data.get("to_place"),
+        total_mileage=data.get("total_mileage"),
+    )
     if "driver" in data:
         inputs["driver"] = dict(data["driver"])
     return result, inputs
