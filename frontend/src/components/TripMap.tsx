@@ -4,10 +4,7 @@ import { createPortal } from 'react-dom'
 import type { PlaceDraft, RouteLeg, Segment } from '../lib/api'
 import { DUTY, KIND } from '../lib/duty'
 
-const STYLES = {
-  light: 'https://tiles.openfreemap.org/styles/positron',
-  dark: 'https://tiles.openfreemap.org/styles/dark',
-}
+const MAP_STYLE = 'https://tiles.openfreemap.org/styles/positron'
 const US_BOUNDS: [[number, number], [number, number]] = [
   [-124.8, 24.4],
   [-66.9, 49.4],
@@ -18,7 +15,6 @@ const NO_STOPS: Segment[] = []
 const ROUTE_LAYERS = ['route-casing-0', 'route-line-0', 'route-casing-1', 'route-line-1', 'preview-line']
 
 interface Props {
-  theme: 'light' | 'dark'
   places: { current?: PlaceDraft; pickup?: PlaceDraft; dropoff?: PlaceDraft }
   legs?: RouteLeg[]
   stops?: Segment[]
@@ -39,7 +35,7 @@ function cssVar(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 }
 
-export function TripMap({ theme, places, legs, stops = NO_STOPS, activeStopId, onStopSelect, stopLabel, padding, className }: Props) {
+export function TripMap({ places, legs, stops = NO_STOPS, activeStopId, onStopSelect, stopLabel, padding, className }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibre | null>(null)
   const [ready, setReady] = useState(false)
@@ -52,7 +48,7 @@ export function TripMap({ theme, places, legs, stops = NO_STOPS, activeStopId, o
     if (!container.current) return
     const instance = new MapLibre({
       container: container.current,
-      style: STYLES[theme],
+      style: MAP_STYLE,
       bounds: US_BOUNDS,
       fitBoundsOptions: { padding: 24 },
       attributionControl: false,
@@ -78,13 +74,6 @@ export function TripMap({ theme, places, legs, stops = NO_STOPS, activeStopId, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Theme switch swaps the basemap; route layers are re-added on style.load.
-  const shownTheme = useRef(theme)
-  useEffect(() => {
-    if (shownTheme.current === theme) return
-    shownTheme.current = theme
-    map.current?.setStyle(STYLES[theme])
-  }, [theme])
 
   useEffect(() => {
     if (!ready || !map.current) return

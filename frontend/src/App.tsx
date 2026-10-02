@@ -1,7 +1,6 @@
 import { PlusIcon } from '@phosphor-icons/react'
 import { BrowserRouter, Link, NavLink, Route, Routes, useMatch } from 'react-router-dom'
 import { AppHeader } from './components/AppHeader'
-import { useTheme } from './hooks/useTheme'
 import { PlannerPage } from './pages/PlannerPage'
 import { TripPage } from './pages/TripPage'
 
@@ -26,14 +25,13 @@ function TripNav() {
 }
 
 function Shell() {
-  const { theme, toggle } = useTheme()
   const onTrip = useMatch('/trips/:id/*')
   return (
     <div className="min-h-[100dvh] bg-canvas text-ink">
       <a href="#main" className="sr-only rounded-full bg-ink px-4 py-2 text-canvas focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50">
         Skip to content
       </a>
-      <AppHeader compact={Boolean(onTrip)} theme={theme} onToggleTheme={toggle}>
+      <AppHeader compact={Boolean(onTrip)}>
         <TripNav />
         {onTrip && (
           <Link to="/" className="btn btn-ghost hidden h-9 px-3 text-[14px] sm:inline-flex">
@@ -43,9 +41,9 @@ function Shell() {
         )}
       </AppHeader>
       <Routes>
-        <Route path="/" element={<PlannerPage theme={theme} />} />
-        <Route path="/trips/:id" element={<TripPage theme={theme} view="route" />} />
-        <Route path="/trips/:id/logs" element={<TripPage theme={theme} view="logs" />} />
+        <Route path="/" element={<PlannerPage />} />
+        <Route path="/trips/:id" element={<TripPage view="route" />} />
+        <Route path="/trips/:id/logs" element={<TripPage view="logs" />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </div>

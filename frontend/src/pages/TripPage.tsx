@@ -10,7 +10,6 @@ import { DUTY, MAP_STOP_KINDS, stopTitle } from '../lib/duty'
 import { formatDayClock } from '../lib/format'
 
 interface Props {
-  theme: 'light' | 'dark'
   view: 'route' | 'logs'
 }
 
@@ -32,28 +31,28 @@ function useTrip(id: string | undefined) {
   return { trip: trip?.id === id ? trip : null, error, setTrip }
 }
 
-export function TripPage({ theme, view }: Props) {
+export function TripPage({ view }: Props) {
   const { id } = useParams()
   const { trip, error, setTrip } = useTrip(id)
 
   useEffect(() => {
     if (trip) {
-      document.title = `${view === 'logs' ? 'Daily logs' : 'Route'}: ${trip.places.current.label} to ${trip.places.dropoff.label} - Milepost`
+      document.title = `${view === 'logs' ? 'Daily logs' : 'Route'}: ${trip.places.current.label} to ${trip.places.dropoff.label} - HOS Trip Planner Demo`
     }
   }, [trip, view])
 
   if (error) return <TripError error={error} />
-  if (!trip) return view === 'logs' ? <LogsSkeleton /> : <RouteSkeleton theme={theme} />
+  if (!trip) return view === 'logs' ? <LogsSkeleton /> : <RouteSkeleton />
   return view === 'logs' ? (
     <main id="main">
       <LogsView trip={trip} onTripChange={setTrip} />
     </main>
   ) : (
-    <RouteView trip={trip} theme={theme} />
+    <RouteView trip={trip} />
   )
 }
 
-function RouteView({ trip, theme }: { trip: Trip; theme: 'light' | 'dark' }) {
+function RouteView({ trip }: { trip: Trip }) {
   const [active, setActive] = useState<number | null>(null)
   const [copied, setCopied] = useState(false)
   const stops = useMemo(() => trip.segments.filter((s) => MAP_STOP_KINDS.includes(s.kind)), [trip.segments])
@@ -95,7 +94,6 @@ function RouteView({ trip, theme }: { trip: Trip; theme: 'light' | 'dark' }) {
       </div>
       <div className="relative order-1 h-[42vh] min-h-[280px] lg:order-2 lg:h-auto">
         <TripMap
-          theme={theme}
           places={places}
           legs={trip.route.legs}
           stops={stops}
@@ -130,7 +128,7 @@ function MapLegend() {
   )
 }
 
-function RouteSkeleton({ theme }: { theme: 'light' | 'dark' }) {
+function RouteSkeleton() {
   return (
     <main id="main" className="grid lg:h-[calc(100dvh-64px)] lg:grid-cols-[minmax(400px,480px)_1fr]" aria-busy="true">
       <div className="order-2 flex flex-col gap-6 px-4 py-8 sm:px-6 lg:order-1">
@@ -141,7 +139,7 @@ function RouteSkeleton({ theme }: { theme: 'light' | 'dark' }) {
         <div className="skeleton h-64 rounded-2xl" />
       </div>
       <div className="order-1 h-[42vh] lg:order-2 lg:h-auto">
-        <TripMap theme={theme} places={{}} className="h-full" />
+        <TripMap places={{}} className="h-full" />
       </div>
     </main>
   )

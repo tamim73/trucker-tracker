@@ -6,7 +6,7 @@ import { ApiError, api, type DriverDetails, type TripRequest } from '../lib/api'
 import { EMPTY_DRIVER } from '../lib/driver'
 import { defaultDeparture } from '../lib/format'
 
-const DRIVER_KEY = 'milepost-driver'
+const DRIVER_KEY = 'trip-planner-driver'
 
 
 function storedDriver(): DriverDetails {
@@ -45,11 +45,7 @@ function sampleTrip(): FormState {
   }
 }
 
-interface Props {
-  theme: 'light' | 'dark'
-}
-
-export function PlannerPage({ theme }: Props) {
+export function PlannerPage() {
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const [form, setForm] = useState<FormState>(() => ({
@@ -84,7 +80,7 @@ export function PlannerPage({ theme }: Props) {
   }, [fromId])
 
   useEffect(() => {
-    document.title = 'Plan a trip - Milepost'
+    document.title = 'Plan a Trip - HOS Trip Planner Demo'
   }, [])
 
   async function submit(request: TripRequest) {
@@ -133,7 +129,7 @@ export function PlannerPage({ theme }: Props) {
         <Assumptions />
       </div>
       <div className="h-[42vh] min-h-[280px] lg:h-auto">
-        <TripMap theme={theme} places={places} className="h-full" />
+        <TripMap places={places} className="h-full" />
       </div>
     </main>
   )

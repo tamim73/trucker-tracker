@@ -1,6 +1,6 @@
-# Milepost
+# HOS Trip Planner Demo
 
-Trip planner for property-carrying truck drivers. Enter the current location, pickup, drop-off and hours already used in the 70-hour cycle. Milepost returns a route map with every required stop and a filled-out FMCSA daily log sheet for each day of the trip.
+Trip planner for property-carrying truck drivers. Enter the current location, pickup, drop-off and hours already used in the 70-hour cycle. It returns a route map with every required stop and a filled-out FMCSA daily log sheet for each day of the trip.
 
 Django REST API + React (Vite, TypeScript, Tailwind v4). Free, key-less map services: OpenFreeMap tiles, OSRM routing, Photon (OpenStreetMap) place search.
 

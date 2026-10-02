@@ -1,4 +1,4 @@
-"""Django settings for the Milepost trip planner."""
+"""Django settings for the HOS trip planner demo."""
 
 import os
 from pathlib import Path
@@ -83,7 +83,7 @@ REST_FRAMEWORK = {
 CORS_ALLOWED_ORIGINS = env_list("DJANGO_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
 
 # External, key-free geo services. Override to point at self-hosted instances.
-GEO_USER_AGENT = os.environ.get("GEO_USER_AGENT", "milepost-trip-planner/1.0 (POC)")
+GEO_USER_AGENT = os.environ.get("GEO_USER_AGENT", "hos-trip-planner-demo/1.0")
 PHOTON_URL = os.environ.get("PHOTON_URL", "https://photon.komoot.io")
 OSRM_URL = os.environ.get("OSRM_URL", "https://router.project-osrm.org")
 GEO_TIMEOUT_SECONDS = float(os.environ.get("GEO_TIMEOUT_SECONDS", "12"))
