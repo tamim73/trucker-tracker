@@ -1,0 +1,7 @@
+.git
+.claude
+**/node_modules
+**/.venv
+**/__pycache__
+frontend/dist
+backend/db.sqlite3

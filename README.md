@@ -33,6 +33,8 @@ cd ../backend && DJANGO_DEBUG=0 DJANGO_SECRET_KEY=change-me DJANGO_ALLOWED_HOSTS
 
 Django serves the built React app (WhiteNoise) and the API from one process.
 
+The root `Dockerfile` does both steps and is what Railway builds. Variables: `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`, and `DJANGO_DB_PATH` pointing at a mounted volume (e.g. `/data/db.sqlite3`) so saved trips survive redeploys.
+
 ### Tests
 
 ```bash
