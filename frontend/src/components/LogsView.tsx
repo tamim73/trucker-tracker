@@ -16,7 +16,18 @@ import { DUTY, DUTY_ORDER, KIND } from '../lib/duty'
 import { formatClock, formatDay, formatHM, formatLongDate, formatMiles } from '../lib/format'
 import { draftLog, moveBoundary, normalize, paint, setStatus, totals, withLocations } from '../lib/logEdit'
 import { LogEditor, type Draft } from './LogEditor'
-import { LogSheet, type SheetEditing } from './LogSheet'
+import { LogSheet, type HeaderEditing, type SheetEditing } from './LogSheet'
+
+function editPayload(draft: Draft) {
+  return {
+    entries: draft.entries,
+    miles: Number(draft.miles) || 0,
+    total_mileage: Number(draft.totalMileage) || 0,
+    from_place: draft.from,
+    to_place: draft.to,
+    driver: draft.driver,
+  }
+}
 
 interface Props {
   trip: Trip
@@ -43,7 +54,8 @@ export function LogsView({ trip, onTripChange }: Props) {
   const [reasonError, setReasonError] = useState<string>()
   const reasonRef = useRef<HTMLTextAreaElement>(null)
   const editing = draft !== null
-  const dirty = editing && (past.length > 0 || draft.reason.trim() !== '' || Number(draft.miles) !== log.miles)
+  const initialDraft = useRef<Draft | null>(null)
+  const dirty = editing && draft !== initialDraft.current
 
   useEffect(() => {
     tabs.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
@@ -58,14 +70,14 @@ export function LogsView({ trip, onTripChange }: Props) {
   }, [dirty])
 
   // Server preview: recap and violations for the unsaved edit.
-  const previewKey = draft && JSON.stringify([draft.entries, draft.miles, index])
+  const previewKey = draft && JSON.stringify([draft.entries, draft.miles, draft.totalMileage, index])
   useEffect(() => {
     if (!draft || !previewKey) return
     const controller = new AbortController()
     const timer = window.setTimeout(() => {
       setPreviewing(true)
       api
-        .previewLog(trip.id, index, { entries: draft.entries, miles: Number(draft.miles) || 0, driver: draft.driver }, controller.signal)
+        .previewLog(trip.id, index, editPayload(draft), controller.signal)
         .then((t) => setPreview(t.logs[index]))
         .catch(() => undefined)
         .finally(() => !controller.signal.aborted && setPreviewing(false))
@@ -88,7 +100,17 @@ export function LogsView({ trip, onTripChange }: Props) {
   }
 
   function startEditing() {
-    setDraft({ entries: normalize(withLocations(log)), miles: String(log.miles), reason: '', driver })
+    const initial: Draft = {
+      entries: normalize(withLocations(log)),
+      miles: String(Math.round(log.miles)),
+      totalMileage: String(Math.round(log.total_mileage ?? log.miles)),
+      from: log.from,
+      to: log.to,
+      reason: '',
+      driver,
+    }
+    initialDraft.current = initial
+    setDraft(initial)
     setPast([])
     setFuture([])
     setPreview(log)
@@ -176,12 +198,7 @@ export function LogsView({ trip, onTripChange }: Props) {
     setSaving(true)
     setError('')
     try {
-      const updated = await api.saveLog(trip.id, index, {
-        entries: draft.entries,
-        miles: Number(draft.miles) || 0,
-        reason: draft.reason.trim(),
-        driver: draft.driver,
-      })
+      const updated = await api.saveLog(trip.id, index, { ...editPayload(draft), reason: draft.reason.trim() })
       onTripChange(updated)
       stopEditing()
     } catch (err) {
@@ -195,9 +212,19 @@ export function LogsView({ trip, onTripChange }: Props) {
   const shown: DailyLog = draft
     ? {
         ...draftLog({ ...log, ...(preview ?? {}) }, draft.entries, Number(draft.miles) || 0, previousStatus),
+        from: draft.from,
+        to: draft.to,
+        total_mileage: Number(draft.totalMileage) || 0,
         edit: log.edit,
       }
     : log
+  const header: HeaderEditing | undefined = draft
+    ? {
+        day: { from: draft.from, to: draft.to, miles: draft.miles, totalMileage: draft.totalMileage },
+        onDayChange: (field, value) => setDraft((d) => d && { ...d, [field]: value }),
+        onDriverChange: (field, value) => setDraft((d) => d && { ...d, driver: { ...d.driver, [field]: value } }),
+      }
+    : undefined
   const shownDriver = draft?.driver ?? driver
   const shownTotals = draft ? totals(draft.entries) : log.totals
 
@@ -328,6 +355,7 @@ export function LogsView({ trip, onTripChange }: Props) {
               highlight={hover}
               animate={!editing}
               editing={sheetEditing}
+              header={header}
             />
           </div>
         </div>

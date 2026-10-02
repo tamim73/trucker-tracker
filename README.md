@@ -67,7 +67,8 @@ On the logs page, **Edit Log** opens the sheet for changes:
 - Drag a round handle sideways (or use the left and right arrows) to move a change of duty status. Dropping it on the next change removes the piece in between. Times snap to 15 minutes.
 - Neighbors on the same duty status join automatically, so the line only has a point where it changes rows.
 - The entry list below the sheet edits the same data with plain form fields: status, start time, location and note, plus remove.
-- Undo and redo (Ctrl+Z, Shift+Ctrl+Z), total miles, and the sheet header (driver, carrier, equipment).
+- The header and shipping fields are typed straight onto the sheet: From, To, total miles driving, total mileage, truck and trailer numbers, carrier, office and terminal addresses, driver, co-driver, shipping document and commodity. From, To and mileage are per day; the rest apply to every sheet.
+- Undo and redo (Ctrl+Z, Shift+Ctrl+Z) for the duty status line.
 
 While editing, the server recomputes totals, remarks, the 70-hour recap and hours-of-service violations, and the sheet marks any driving that breaks a limit in red. Saving requires a reason, which is stored and printed on the sheet, as ELD rules require for edits (395.30). Later days are rechecked too, since a short rest carries over. **Restore Planned Log** brings back the original plan for that day.
 
@@ -79,7 +80,7 @@ While editing, the server recomputes totals, remarks, the 70-hour recap and hour
 | GET | `/api/places/reverse?lat=&lon=` | "City, ST" for a coordinate |
 | POST | `/api/trips` | Plan and save a trip |
 | GET | `/api/trips/<id>` | Fetch a saved trip |
-| PUT | `/api/trips/<id>/logs/<day>` | Save a driver's edit of one daily log (entries, miles, reason, header) |
+| PUT | `/api/trips/<id>/logs/<day>` | Save a driver's edit of one daily log (entries, miles, total mileage, from, to, reason, driver details) |
 | POST | `/api/trips/<id>/logs/<day>/preview` | Recompute totals, recap and violations for an unsaved edit |
 | DELETE | `/api/trips/<id>/logs/<day>` | Restore the planned log for that day |
 

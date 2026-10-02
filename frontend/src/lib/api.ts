@@ -108,11 +108,15 @@ export interface DailyLog {
   }
   violations?: Violation[]
   edit?: { reason: string; edited_at: string }
+  total_mileage?: number
 }
 
 export interface LogEdit {
   entries: LogEntry[]
   miles: number
+  total_mileage: number
+  from_place: string
+  to_place: string
   reason: string
   driver: DriverDetails
 }
