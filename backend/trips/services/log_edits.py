@@ -15,6 +15,10 @@ from .hos import DRIVING, OFF_DUTY, ON_DUTY, SLEEPER
 from .logs import DAY, refresh_logs
 
 QUARTER = 15
+MAX_EDIT_HISTORY = 50
+# These checks come from the route plan (fuel stops, dock time), which log
+# edits do not change.
+PLAN_ONLY_CHECKS = {"fuel", "dock"}
 
 KIND_STATUS = {
     "pre_trip": ON_DUTY,
@@ -83,6 +87,11 @@ def refresh_result(result: dict) -> None:
     result["compliance"] = [by_key.get(c["key"], c) for c in result["compliance"]]
     result["violations"] = check["violations"]
     result["edited"] = any("edit" in log for log in result["logs"])
+    for c in result["compliance"]:
+        if c["key"] in PLAN_ONLY_CHECKS and result["edited"]:
+            c["basis"] = "plan"
+        else:
+            c.pop("basis", None)
 
 
 def apply_edit(
@@ -107,7 +116,10 @@ def apply_edit(
     log["total_mileage"] = round(total_mileage if total_mileage is not None else miles, 1)
     log["from"] = (from_place or "").strip() or log["entries"][0]["location"] or log["from"]
     log["to"] = (to_place or "").strip() or log["entries"][-1]["location"] or log["to"]
-    log["edit"] = {"reason": reason.strip(), "edited_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    edit = {"reason": reason.strip(), "edited_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    log["edit"] = edit
+    # Every edit stays on record (395.30); the latest one is also under "edit".
+    log["edits"] = [*log.get("edits", []), edit][-MAX_EDIT_HISTORY:]
     refresh_result(result)
 
 

@@ -11,30 +11,30 @@ import {
   BriefcaseIcon,
   type Icon,
 } from '@phosphor-icons/react'
-import type { DutyStatus, Segment, SegmentKind } from './api'
+import type { DutyStatus, LogEntry, Segment, SegmentKind } from './api'
 
 export const DUTY_ORDER: DutyStatus[] = ['off_duty', 'sleeper_berth', 'driving', 'on_duty']
 
-export const DUTY: Record<DutyStatus, { label: string; short: string; line: string; color: string }> = {
-  off_duty: { label: 'Off duty', short: 'OFF', line: '1. Off Duty', color: 'var(--off)' },
-  sleeper_berth: { label: 'Sleeper berth', short: 'SB', line: '2. Sleeper Berth', color: 'var(--sleeper)' },
-  driving: { label: 'Driving', short: 'D', line: '3. Driving', color: 'var(--driving)' },
-  on_duty: { label: 'On duty, not driving', short: 'ON', line: '4. On Duty', color: 'var(--onduty)' },
+export const DUTY: Record<DutyStatus, { label: string; color: string }> = {
+  off_duty: { label: 'Off duty', color: 'var(--off)' },
+  sleeper_berth: { label: 'Sleeper berth', color: 'var(--sleeper)' },
+  driving: { label: 'Driving', color: 'var(--driving)' },
+  on_duty: { label: 'On duty, not driving', color: 'var(--onduty)' },
 }
 
-export const KIND: Record<SegmentKind, { title: string; short: string; icon: Icon }> = {
-  pre_trip: { title: 'Pre-trip inspection', short: 'Pre-trip', icon: ClipboardTextIcon },
-  drive: { title: 'Drive', short: 'Driving', icon: SteeringWheelIcon },
-  pickup: { title: 'Pickup', short: 'Pickup', icon: PackageIcon },
-  dropoff: { title: 'Drop-off', short: 'Drop-off', icon: FlagCheckeredIcon },
-  post_trip: { title: 'Post-trip inspection', short: 'Post-trip', icon: ClipboardTextIcon },
-  fuel: { title: 'Fuel stop', short: 'Fuel', icon: GasPumpIcon },
-  break: { title: '30-minute break', short: '30-min break', icon: CoffeeIcon },
-  rest: { title: '10-hour break', short: '10-hr break', icon: BedIcon },
-  restart: { title: '34-hour restart', short: '34-hr restart', icon: ArrowsClockwiseIcon },
-  off_duty: { title: 'Off duty', short: 'Off duty', icon: MoonIcon },
-  sleeper: { title: 'Sleeper berth', short: 'Sleeper', icon: BedIcon },
-  on_duty: { title: 'On duty', short: 'On duty', icon: BriefcaseIcon },
+export const KIND: Record<SegmentKind, { title: string; icon: Icon }> = {
+  pre_trip: { title: 'Pre-trip inspection', icon: ClipboardTextIcon },
+  drive: { title: 'Drive', icon: SteeringWheelIcon },
+  pickup: { title: 'Pickup', icon: PackageIcon },
+  dropoff: { title: 'Drop-off', icon: FlagCheckeredIcon },
+  post_trip: { title: 'Post-trip inspection', icon: ClipboardTextIcon },
+  fuel: { title: 'Fuel stop', icon: GasPumpIcon },
+  break: { title: '30-minute break', icon: CoffeeIcon },
+  rest: { title: '10-hour break', icon: BedIcon },
+  restart: { title: '34-hour restart', icon: ArrowsClockwiseIcon },
+  off_duty: { title: 'Off duty', icon: MoonIcon },
+  sleeper: { title: 'Sleeper berth', icon: BedIcon },
+  on_duty: { title: 'On duty', icon: BriefcaseIcon },
 }
 
 /** Kind used when the driver sets a period to a status by hand. */
@@ -48,8 +48,24 @@ export const GENERIC_KIND: Record<DutyStatus, SegmentKind> = {
 /** Stops that get their own marker on the map. */
 export const MAP_STOP_KINDS: SegmentKind[] = ['fuel', 'break', 'rest', 'restart']
 
+const UNKNOWN_KIND = { title: 'Duty status change', icon: ClipboardTextIcon }
+
+/** Title and icon for a kind, tolerant of kinds this client does not know. */
+export function kindInfo(kind: string): { title: string; icon: Icon } {
+  return KIND[kind as SegmentKind] ?? UNKNOWN_KIND
+}
+
+/** Kinds created by hand in the log editor; their note names the activity. */
+export const NOTE_KINDS: SegmentKind[] = ['off_duty', 'sleeper', 'on_duty']
+
+/** What an entry is called in lists: the driver's note for hand-made entries, otherwise its activity. */
+export function entryLabel(entry: Pick<LogEntry, 'kind' | 'note'>) {
+  if (NOTE_KINDS.includes(entry.kind) && entry.note) return entry.note
+  return entry.kind === 'drive' ? 'Driving' : kindInfo(entry.kind).title
+}
+
 export function stopTitle(segment: Segment) {
   if (segment.kind === 'pickup') return `Pickup at ${segment.from.label}`
   if (segment.kind === 'dropoff') return `Drop-off at ${segment.from.label}`
-  return KIND[segment.kind].title
+  return kindInfo(segment.kind).title
 }

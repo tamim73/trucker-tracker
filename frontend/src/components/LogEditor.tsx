@@ -1,10 +1,10 @@
-import { CaretDownIcon, CheckCircleIcon, SpinnerGapIcon, TrashIcon, WarningCircleIcon } from '@phosphor-icons/react'
+import { CaretDownIcon, CheckCircleIcon, PlusIcon, SpinnerGapIcon, TrashIcon, WarningCircleIcon } from '@phosphor-icons/react'
 import { useId, useRef, type Ref } from 'react'
 import type { DailyLog, DriverDetails, DutyStatus, LogEntry } from '../lib/api'
 import { DRIVER_FIELDS } from '../lib/driver'
-import { DUTY, DUTY_ORDER, KIND } from '../lib/duty'
-import { formatHM } from '../lib/format'
-import { DAY, fromTimeValue, moveBoundary, removeEntry, setStatus, STEP, toTimeValue, updateEntry } from '../lib/logEdit'
+import { DUTY, DUTY_ORDER, kindInfo } from '../lib/duty'
+import { formatHM, formatMinuteOfDay as clock } from '../lib/format'
+import { fromTimeValue, insertChange, moveBoundary, removeEntry, setStatus, STEP, toTimeValue, updateEntry } from '../lib/logEdit'
 
 export interface Draft {
   entries: LogEntry[]
@@ -23,6 +23,7 @@ interface Props {
   onSnapshot: (entries: LogEntry[]) => void
   preview: DailyLog | null
   previewing: boolean
+  previewError?: string
   reasonError?: string
   reasonRef: Ref<HTMLTextAreaElement>
   onHover: (minute: number | null) => void
@@ -31,14 +32,8 @@ interface Props {
 const inputClass =
   'h-10 w-full min-w-0 rounded-[10px] bg-soft px-3 text-[14px] text-ink outline-none placeholder:text-mute focus-visible:shadow-[inset_0_0_0_2px_var(--ink)] focus-visible:outline-none disabled:opacity-60'
 
-function clock(minute: number) {
-  if (minute === DAY) return 'Midnight'
-  const h = Math.floor(minute / 60)
-  const m = minute % 60
-  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`
-}
 
-export function LogEditor({ draft, onChange, onSnapshot, preview, previewing, reasonError, reasonRef, onHover }: Props) {
+export function LogEditor({ draft, onChange, onSnapshot, preview, previewing, previewError, reasonError, reasonRef, onHover }: Props) {
   const ids = { reason: useId(), miles: useId() }
   const entries = draft.entries
   const focusSnapshot = useRef<LogEntry[] | null>(null)
@@ -72,7 +67,7 @@ export function LogEditor({ draft, onChange, onSnapshot, preview, previewing, re
           </p>
         </div>
         <div
-          className="hidden grid-cols-[196px_128px_72px_1fr_1fr_44px] gap-2 px-3 text-[12px] font-medium text-body lg:grid"
+          className="hidden grid-cols-[196px_128px_72px_1fr_1fr_84px] gap-2 px-3 text-[12px] font-medium text-body lg:grid"
           aria-hidden
         >
           <span>Status</span>
@@ -88,7 +83,7 @@ export function LogEditor({ draft, onChange, onSnapshot, preview, previewing, re
               key={i}
               onMouseEnter={() => onHover(entry.start)}
               onMouseLeave={() => onHover(null)}
-              className="grid grid-cols-2 items-center gap-2 rounded-2xl border border-hairline p-2.5 lg:grid-cols-[196px_128px_72px_1fr_1fr_44px]"
+              className="grid grid-cols-2 items-center gap-2 rounded-2xl border border-hairline p-2.5 lg:grid-cols-[196px_128px_72px_1fr_1fr_84px]"
             >
               <div className="col-span-2 flex items-center gap-2 lg:col-span-1">
                 <span className="size-2.5 shrink-0 rounded-full" style={{ background: DUTY[entry.status].color }} aria-hidden />
@@ -114,10 +109,14 @@ export function LogEditor({ draft, onChange, onSnapshot, preview, previewing, re
                 disabled={i === 0}
                 onBlur={(e) => {
                   const minute = fromTimeValue(e.target.value)
-                  if (minute == null) return
-                  const next = moveBoundary(entries, i, minute)
-                  if (next === entries) e.target.value = toTimeValue(entry.start)
-                  else change(next)
+                  const prev = entries[i - 1]
+                  // A typed time must stay strictly inside the two neighboring entries;
+                  // otherwise restore it rather than silently removing an entry.
+                  if (minute == null || !prev || minute <= prev.start || minute >= entry.end) {
+                    e.target.value = toTimeValue(entry.start)
+                    return
+                  }
+                  change(moveBoundary(entries, i, minute))
                 }}
                 onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
                 className={`${inputClass} tnum font-mono`}
@@ -140,7 +139,7 @@ export function LogEditor({ draft, onChange, onSnapshot, preview, previewing, re
               <input
                 type="text"
                 aria-label={`Entry ${i + 1} note`}
-                placeholder={`${KIND[entry.kind]?.title ?? DUTY[entry.status].label}…`}
+                placeholder={`${kindInfo(entry.kind).title}…`}
                 autoComplete="off"
                 value={entry.note}
                 maxLength={160}
@@ -149,6 +148,16 @@ export function LogEditor({ draft, onChange, onSnapshot, preview, previewing, re
                 className={`${inputClass} col-span-2 lg:col-span-1`}
               />
               <div className="col-span-2 flex justify-end gap-1 lg:col-span-1">
+                <button
+                  type="button"
+                  className="icon-btn size-9"
+                  onClick={() => change(insertChange(entries, i))}
+                  disabled={entry.end - entry.start < 2 * STEP}
+                  aria-label={`Add a change of duty status halfway through entry ${i + 1}`}
+                  title="Add a change halfway through"
+                >
+                  <PlusIcon size={17} weight="bold" aria-hidden />
+                </button>
                 <button
                   type="button"
                   className="icon-btn size-9"
@@ -218,7 +227,12 @@ export function LogEditor({ draft, onChange, onSnapshot, preview, previewing, re
               </span>
             )}
           </div>
-          {violations.length === 0 ? (
+          {previewError ? (
+            <p role="alert" className="flex items-start gap-2 rounded-2xl bg-danger-soft px-4 py-3 text-[14px] text-danger">
+              <WarningCircleIcon size={18} weight="fill" className="mt-px shrink-0" aria-hidden />
+              {previewError} Violations can't be shown until the check succeeds.
+            </p>
+          ) : !preview ? null : violations.length === 0 ? (
             <p className="flex items-center gap-2 rounded-2xl bg-accent-soft px-4 py-3 text-[14px] font-medium text-accent">
               <CheckCircleIcon size={18} weight="fill" aria-hidden />
               No violations on this day

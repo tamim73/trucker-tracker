@@ -2,7 +2,7 @@ import { AttributionControl, LngLatBounds, Map as MapLibre, Marker, NavigationCo
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { PlaceDraft, RouteLeg, Segment } from '../lib/api'
-import { DUTY, KIND } from '../lib/duty'
+import { DUTY, kindInfo } from '../lib/duty'
 
 const MAP_STYLE = 'https://tiles.openfreemap.org/styles/positron'
 const US_BOUNDS: [[number, number], [number, number]] = [
@@ -12,7 +12,8 @@ const US_BOUNDS: [[number, number], [number, number]] = [
 setWorkerUrl('/maplibre/maplibre-gl-worker.mjs')
 
 const NO_STOPS: Segment[] = []
-const ROUTE_LAYERS = ['route-casing-0', 'route-line-0', 'route-casing-1', 'route-line-1', 'preview-line']
+/** Prefix of every layer and source this component adds, so redraws can remove them all. */
+const OWN = 'trip-'
 
 interface Props {
   places: { current?: PlaceDraft; pickup?: PlaceDraft; dropoff?: PlaceDraft }
@@ -39,6 +40,7 @@ export function TripMap({ places, legs, stops = NO_STOPS, activeStopId, onStopSe
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibre | null>(null)
   const [ready, setReady] = useState(false)
+  const [failed, setFailed] = useState(false)
   const latest = useRef({ legs, places })
   latest.current = { legs, places }
   const pad = padding ?? { top: 80, right: 110, bottom: 80, left: 80 }
@@ -62,6 +64,12 @@ export function TripMap({ places, legs, stops = NO_STOPS, activeStopId, onStopSe
     instance.on('style.load', () => {
       drawRoute(instance, latest.current.legs, latest.current.places)
       setReady(true)
+      setFailed(false)
+    })
+    // A style that cannot load (tile service down) would leave the skeleton forever.
+    instance.on('error', (event) => {
+      if (!instance.isStyleLoaded()) setFailed(true)
+      console.warn('Map error', event.error)
     })
     map.current = instance
     const resize = new ResizeObserver(() => instance.resize())
@@ -183,7 +191,12 @@ export function TripMap({ places, legs, stops = NO_STOPS, activeStopId, onStopSe
       <div className="absolute inset-0">
         <div ref={container} className="h-full w-full" role="region" aria-label="Route map" />
       </div>
-      {!ready && <div className="skeleton absolute inset-0" aria-hidden />}
+      {!ready && !failed && <div className="skeleton absolute inset-0" aria-hidden />}
+      {failed && !ready && (
+        <p role="status" className="absolute inset-0 flex items-center justify-center p-6 text-center text-[14px] text-body">
+          The map could not load. The route, stops and logs are still correct.
+        </p>
+      )}
       {pins.map((pin) => {
         const entry = elements.current.get(pin.key)
         if (!entry) return null
@@ -219,13 +232,13 @@ function PinView({ pin, active, onSelect, label }: { pin: Pin; active: boolean; 
     )
   }
   const stop = pin.stop
-  const Icon = KIND[stop.kind].icon
+  const Icon = kindInfo(stop.kind).icon
   return (
     <div className="relative">
       <button
         type="button"
         onClick={() => onSelect?.(stop.id)}
-        aria-label={label ?? KIND[stop.kind].title}
+        aria-label={label ?? kindInfo(stop.kind).title}
         className={`flex items-center justify-center rounded-full border-2 border-[var(--surface)] text-[#fefefd] shadow-[0_2px_8px_rgb(0_0_0/0.25)] transition-transform duration-200 ${
           active ? 'size-9 scale-110' : 'size-7 hover:scale-110'
         }`}
@@ -253,19 +266,19 @@ function drawRoute(m: MapLibre, legs: RouteLeg[] | undefined, places: Props['pla
   const deadhead = cssVar('--deadhead') || '#6b6b68'
   const casing = cssVar('--surface') || '#ffffff'
 
-  for (const id of ROUTE_LAYERS) if (m.getLayer(id)) m.removeLayer(id)
-  for (const id of ['route-0', 'route-1', 'preview']) if (m.getSource(id)) m.removeSource(id)
+  for (const layer of m.getStyle().layers ?? []) if (layer.id.startsWith(OWN)) m.removeLayer(layer.id)
+  for (const id of Object.keys(m.getStyle().sources ?? {})) if (id.startsWith(OWN)) m.removeSource(id)
 
   if (legs?.length) {
     legs.forEach((leg, i) => {
-      const source = `route-${i}`
+      const source = `${OWN}route-${i}`
       m.addSource(source, {
         type: 'geojson',
         data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: leg.geometry } },
       })
       m.addLayer(
         {
-          id: `route-casing-${i}`,
+          id: `${OWN}casing-${i}`,
           type: 'line',
           source,
           layout: { 'line-join': 'round', 'line-cap': 'round' },
@@ -275,7 +288,7 @@ function drawRoute(m: MapLibre, legs: RouteLeg[] | undefined, places: Props['pla
       )
       m.addLayer(
         {
-          id: `route-line-${i}`,
+          id: `${OWN}line-${i}`,
           type: 'line',
           source,
           layout: { 'line-join': 'round', 'line-cap': 'round' },
@@ -293,15 +306,15 @@ function drawRoute(m: MapLibre, legs: RouteLeg[] | undefined, places: Props['pla
 
   const points = [places.current, places.pickup, places.dropoff].filter(hasCoords).map((p) => [p.lon, p.lat])
   if (points.length >= 2) {
-    m.addSource('preview', {
+    m.addSource(`${OWN}preview`, {
       type: 'geojson',
       data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: points } },
     })
     m.addLayer(
       {
-        id: 'preview-line',
+        id: `${OWN}preview`,
         type: 'line',
-        source: 'preview',
+        source: `${OWN}preview`,
         layout: { 'line-cap': 'round' },
         paint: { 'line-color': ink, 'line-opacity': 0.55, 'line-width': 2, 'line-dasharray': [2, 2] },
       },

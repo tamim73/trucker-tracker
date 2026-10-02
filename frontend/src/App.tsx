@@ -1,5 +1,5 @@
-import { PlusIcon } from '@phosphor-icons/react'
-import { BrowserRouter, Link, NavLink, Route, Routes, useMatch } from 'react-router-dom'
+import { PlusIcon, WarningCircleIcon } from '@phosphor-icons/react'
+import { createBrowserRouter, Link, NavLink, Outlet, RouterProvider, useMatch, useRouteError } from 'react-router-dom'
 import { AppHeader } from './components/AppHeader'
 import { PlannerPage } from './pages/PlannerPage'
 import { TripPage } from './pages/TripPage'
@@ -40,13 +40,29 @@ function Shell() {
           </Link>
         )}
       </AppHeader>
-      <Routes>
-        <Route path="/" element={<PlannerPage />} />
-        <Route path="/trips/:id" element={<TripPage view="route" />} />
-        <Route path="/trips/:id/logs" element={<TripPage view="logs" />} />
-        <Route path="*" element={<NotFound />} />
-      </Routes>
+      <Outlet />
     </div>
+  )
+}
+
+/** Shown instead of a blank page when a screen fails to render. */
+function RenderError() {
+  const error = useRouteError()
+  console.error(error)
+  return (
+    <main id="main" className="mx-auto flex max-w-lg flex-col items-start gap-4 px-4 py-20 sm:px-6">
+      <WarningCircleIcon size={32} weight="bold" className="text-danger" aria-hidden />
+      <h1 className="text-[28px] leading-9 font-bold tracking-[-0.02em]">Something went wrong</h1>
+      <p className="text-[16px] text-body">This screen could not be shown. Reload the page, or start a new trip plan.</p>
+      <div className="flex gap-2">
+        <button type="button" className="btn btn-primary" onClick={() => window.location.reload()}>
+          Reload Page
+        </button>
+        <Link to="/" className="btn btn-subtle">
+          Plan a Trip
+        </Link>
+      </div>
+    </main>
   )
 }
 
@@ -62,10 +78,23 @@ function NotFound() {
   )
 }
 
+const router = createBrowserRouter([
+  {
+    element: <Shell />,
+    children: [
+      {
+        errorElement: <RenderError />,
+        children: [
+          { path: '/', element: <PlannerPage /> },
+          { path: '/trips/:id', element: <TripPage view="route" /> },
+          { path: '/trips/:id/logs', element: <TripPage view="logs" /> },
+          { path: '*', element: <NotFound /> },
+        ],
+      },
+    ],
+  },
+])
+
 export default function App() {
-  return (
-    <BrowserRouter>
-      <Shell />
-    </BrowserRouter>
-  )
+  return <RouterProvider router={router} />
 }

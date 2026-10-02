@@ -2,7 +2,7 @@ import { NotebookIcon } from '@phosphor-icons/react'
 import { useEffect, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import type { Segment, Trip } from '../lib/api'
-import { DUTY, KIND, stopTitle } from '../lib/duty'
+import { DUTY, kindInfo, stopTitle } from '../lib/duty'
 import { dayIndex, formatClock, formatDay, formatDuration, formatMiles } from '../lib/format'
 
 interface Props {
@@ -25,7 +25,8 @@ export function Itinerary({ trip, activeId, onSelect }: Props) {
 
   const activeRef = useRef<HTMLLIElement | null>(null)
   useEffect(() => {
-    activeRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    activeRef.current?.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' })
   }, [activeId])
 
   return (
@@ -106,7 +107,7 @@ function StopRow({
   index: number
   ref?: React.Ref<HTMLLIElement>
 }) {
-  const Icon = KIND[segment.kind].icon
+  const Icon = kindInfo(segment.kind).icon
   const duty = DUTY[segment.status]
   return (
     <li ref={ref} className="rise-in" style={{ '--i': index } as React.CSSProperties}>

@@ -91,7 +91,10 @@ export function ComplianceList({ checks, edited }: { checks: ComplianceCheck[]; 
             )}
             <div className="min-w-0 flex-1">
               <p className="text-[15px] leading-5 font-medium">{c.title}</p>
-              <p className="text-[12px] text-mute">{c.rule.startsWith('395') ? `49 CFR ${c.rule}` : c.rule}</p>
+              <p className="text-[12px] text-mute">
+                {c.rule.startsWith('395') ? `49 CFR ${c.rule}` : c.rule}
+                {c.basis === 'plan' ? ', from the route plan' : ''}
+              </p>
             </div>
             <p className="tnum shrink-0 font-mono text-[13px] text-body">{checkValue(c)}</p>
           </li>

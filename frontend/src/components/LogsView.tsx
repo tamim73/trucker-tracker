@@ -3,148 +3,89 @@ import {
   ArrowCounterClockwiseIcon,
   CaretLeftIcon,
   CaretRightIcon,
+  EyeIcon,
   PencilSimpleIcon,
   PrinterIcon,
   SpinnerGapIcon,
   WarningCircleIcon,
 } from '@phosphor-icons/react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { ApiError, api, type DailyLog, type LogEntry, type Trip } from '../lib/api'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
+import { Link, useBlocker, useSearchParams } from 'react-router-dom'
+import { useLogDraft } from '../hooks/useLogDraft'
+import { api, editToken, type DailyLog, type Trip } from '../lib/api'
 import { EMPTY_DRIVER } from '../lib/driver'
-import { DUTY, DUTY_ORDER, KIND } from '../lib/duty'
-import { formatClock, formatDay, formatHM, formatLongDate, formatMiles } from '../lib/format'
-import { draftLog, moveBoundary, normalize, paint, setStatus, totals, withLocations } from '../lib/logEdit'
-import { LogEditor, type Draft } from './LogEditor'
-import { LogSheet, type HeaderEditing, type SheetEditing } from './LogSheet'
-
-function editPayload(draft: Draft) {
-  return {
-    entries: draft.entries,
-    miles: Number(draft.miles) || 0,
-    total_mileage: Number(draft.totalMileage) || 0,
-    from_place: draft.from,
-    to_place: draft.to,
-    driver: draft.driver,
-  }
-}
+import { DUTY, DUTY_ORDER, entryLabel } from '../lib/duty'
+import { formatDay, formatHM, formatLongDate, formatMiles, formatMinuteOfDay } from '../lib/format'
+import { draftLog, totals, withLocations } from '../lib/logEdit'
+import { LogEditor } from './LogEditor'
+import { LogSheet } from './LogSheet'
 
 interface Props {
   trip: Trip
   onTripChange: (trip: Trip) => void
 }
 
+/** True while the browser prints, so the print-only sheets render only then. */
+function usePrinting() {
+  const [printing, setPrinting] = useState(false)
+  useEffect(() => {
+    const before = () => flushSync(() => setPrinting(true))
+    const after = () => setPrinting(false)
+    window.addEventListener('beforeprint', before)
+    window.addEventListener('afterprint', after)
+    return () => {
+      window.removeEventListener('beforeprint', before)
+      window.removeEventListener('afterprint', after)
+    }
+  }, [])
+  return printing
+}
+
 export function LogsView({ trip, onTripChange }: Props) {
+  if (trip.logs.length === 0) {
+    return (
+      <div className="mx-auto max-w-lg px-4 py-20 text-[16px] text-body sm:px-6">
+        This trip has no log sheets. <Link to="/" className="font-medium text-ink underline">Plan a new trip</Link>.
+      </div>
+    )
+  }
+  return <LogsWorkspace trip={trip} onTripChange={onTripChange} />
+}
+
+function LogsWorkspace({ trip, onTripChange }: Props) {
   const [params, setParams] = useSearchParams()
   const count = trip.logs.length
   const requested = Number.parseInt(params.get('day') ?? '1', 10)
   const index = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), count) - 1 : 0
   const log = trip.logs[index]
-  const driver = { ...EMPTY_DRIVER, ...(trip.inputs.driver ?? {}) }
+  const driver = useMemo(() => ({ ...EMPTY_DRIVER, ...(trip.inputs.driver ?? {}) }), [trip.inputs.driver])
+  const canEdit = Boolean(editToken(trip.id))
   const [hover, setHover] = useState<number | null>(null)
   const tabs = useRef<HTMLDivElement>(null)
-
-  const [draft, setDraft] = useState<Draft | null>(null)
-  const [past, setPast] = useState<LogEntry[][]>([])
-  const [future, setFuture] = useState<LogEntry[][]>([])
-  const [preview, setPreview] = useState<DailyLog | null>(null)
-  const [previewing, setPreviewing] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const [reasonError, setReasonError] = useState<string>()
-  const reasonRef = useRef<HTMLTextAreaElement>(null)
-  const editing = draft !== null
-  const initialDraft = useRef<Draft | null>(null)
-  const dirty = editing && draft !== initialDraft.current
+  const focusDay = useRef(false)
+  const printing = usePrinting()
+  const d = useLogDraft(trip, index, onTripChange)
+  const { draft, editing } = d
 
   useEffect(() => {
-    tabs.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    const current = tabs.current?.querySelector<HTMLElement>('[aria-current="page"]')
+    current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    if (focusDay.current) current?.focus()
+    focusDay.current = false
   }, [index])
 
-  // Warn before leaving the page with unsaved edits.
+  // Unsaved edits: warn on reload or tab close, and ask before in-app navigation.
   useEffect(() => {
-    if (!dirty) return
+    if (!d.dirty) return
     const warn = (event: BeforeUnloadEvent) => event.preventDefault()
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
-  }, [dirty])
-
-  // Server preview: recap and violations for the unsaved edit.
-  const previewKey = draft && JSON.stringify([draft.entries, draft.miles, draft.totalMileage, index])
-  useEffect(() => {
-    if (!draft || !previewKey) return
-    const controller = new AbortController()
-    const timer = window.setTimeout(() => {
-      setPreviewing(true)
-      api
-        .previewLog(trip.id, index, editPayload(draft), controller.signal)
-        .then((t) => setPreview(t.logs[index]))
-        .catch(() => undefined)
-        .finally(() => !controller.signal.aborted && setPreviewing(false))
-    }, 300)
-    return () => {
-      controller.abort()
-      window.clearTimeout(timer)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewKey])
-
-  function go(next: number) {
-    if (editing) return
-    setParams({ day: String(next + 1) }, { replace: true })
-  }
-
-  function onKeyDown(event: React.KeyboardEvent) {
-    if (event.key === 'ArrowRight' && index < count - 1) go(index + 1)
-    if (event.key === 'ArrowLeft' && index > 0) go(index - 1)
-  }
-
-  function startEditing() {
-    const initial: Draft = {
-      entries: normalize(withLocations(log)),
-      miles: String(Math.round(log.miles)),
-      totalMileage: String(Math.round(log.total_mileage ?? log.miles)),
-      from: log.from,
-      to: log.to,
-      reason: '',
-      driver,
-    }
-    initialDraft.current = initial
-    setDraft(initial)
-    setPast([])
-    setFuture([])
-    setPreview(log)
-    setError('')
-    setReasonError(undefined)
-  }
-
-  function stopEditing() {
-    setDraft(null)
-    setPreview(null)
-    setPast([])
-    setFuture([])
-  }
-
-  const snapshot = useCallback((entries: LogEntry[]) => {
-    setPast((p) => [...p.slice(-99), entries])
-    setFuture([])
-  }, [])
-
-  const undo = useCallback(() => {
-    if (!draft || past.length === 0) return
-    setFuture((f) => [draft.entries, ...f])
-    setDraft({ ...draft, entries: past[past.length - 1] })
-    setPast((p) => p.slice(0, -1))
-  }, [draft, past])
-
-  const redo = useCallback(() => {
-    if (!draft || future.length === 0) return
-    setPast((p) => [...p, draft.entries])
-    setDraft({ ...draft, entries: future[0] })
-    setFuture((f) => f.slice(1))
-  }, [draft, future])
+  }, [d.dirty])
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => d.dirty && currentLocation.pathname !== nextLocation.pathname)
 
   // Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z, unless a text field has focus.
+  const { undo, redo } = d
   useEffect(() => {
     if (!editing) return
     function onKey(event: KeyboardEvent) {
@@ -160,73 +101,39 @@ export function LogsView({ trip, onTripChange }: Props) {
     return () => window.removeEventListener('keydown', onKey)
   }, [editing, undo, redo])
 
-  // A drag is applied to the entries as they were when it began, so the
-  // dragged index stays valid while neighbors merge and split again.
-  const dragBase = useRef<LogEntry[] | null>(null)
-  const sheetEditing: SheetEditing | undefined = useMemo(() => {
-    if (!draft) return undefined
-    const fromBase = (apply: (entries: LogEntry[]) => LogEntry[]) =>
-      setDraft((d) => d && { ...d, entries: apply(dragBase.current ?? d.entries) })
-    const fromLatest = (apply: (entries: LogEntry[]) => LogEntry[]) => setDraft((d) => d && { ...d, entries: apply(d.entries) })
-    return {
-      onEditStart: () => {
-        snapshot(draft.entries)
-        dragBase.current = draft.entries
-      },
-      onEditEnd: () => {
-        dragBase.current = null
-      },
-      onPaint: (status, from, to) => fromLatest((entries) => paint(entries, status, from, to)),
-      onMoveBoundary: (i, minute) => fromBase((entries) => moveBoundary(entries, i, minute)),
-      onMoveSegment: (i, status) => fromBase((entries) => setStatus(entries, i, status)),
-      onNudgeBoundary: (i, delta) => fromLatest((entries) => moveBoundary(entries, i, (entries[i]?.start ?? 0) + delta)),
-      onNudgeSegment: (i, direction) =>
-        fromLatest((entries) => {
-          const row = DUTY_ORDER.indexOf(entries[i]?.status) + direction
-          return row < 0 || row >= DUTY_ORDER.length ? entries : setStatus(entries, i, DUTY_ORDER[row])
-        }),
-    }
-  }, [draft, snapshot])
+  function go(next: number) {
+    if (editing) return
+    setParams({ day: String(next + 1) }, { replace: true })
+  }
 
-  async function save() {
-    if (!draft) return
-    if (draft.reason.trim().length < 3) {
-      setReasonError('Add a short reason for this edit before saving.')
-      reasonRef.current?.focus()
-      return
+  function onKeyDown(event: React.KeyboardEvent) {
+    if (event.key === 'ArrowRight' && index < count - 1) {
+      focusDay.current = true
+      go(index + 1)
     }
-    setSaving(true)
-    setError('')
-    try {
-      const updated = await api.saveLog(trip.id, index, { ...editPayload(draft), reason: draft.reason.trim() })
-      onTripChange(updated)
-      stopEditing()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not save the log. Try again.')
-    } finally {
-      setSaving(false)
+    if (event.key === 'ArrowLeft' && index > 0) {
+      focusDay.current = true
+      go(index - 1)
     }
   }
 
   const previousStatus = index > 0 ? (trip.logs[index - 1].entries.at(-1)?.status ?? null) : null
-  const shown: DailyLog = draft
-    ? {
-        ...draftLog({ ...log, ...(preview ?? {}) }, draft.entries, Number(draft.miles) || 0, previousStatus),
-        from: draft.from,
-        to: draft.to,
-        total_mileage: Number(draft.totalMileage) || 0,
-        edit: log.edit,
-      }
-    : log
-  const header: HeaderEditing | undefined = draft
-    ? {
-        day: { from: draft.from, to: draft.to, miles: draft.miles, totalMileage: draft.totalMileage },
-        onDayChange: (field, value) => setDraft((d) => d && { ...d, [field]: value }),
-        onDriverChange: (field, value) => setDraft((d) => d && { ...d, driver: { ...d.driver, [field]: value } }),
-      }
-    : undefined
-  const shownDriver = draft?.driver ?? driver
+  const preview = d.preview
+  const shown: DailyLog = useMemo(
+    () =>
+      draft
+        ? {
+            ...draftLog({ ...log, ...(preview ?? {}) }, draft.entries, Number(draft.miles) || 0, previousStatus),
+            from: draft.from,
+            to: draft.to,
+            total_mileage: Number(draft.totalMileage) || 0,
+            edit: log.edit,
+          }
+        : log,
+    [draft, preview, log, previousStatus],
+  )
   const shownTotals = draft ? totals(draft.entries) : log.totals
+  const viewEntries = useMemo(() => withLocations(log), [log])
 
   return (
     <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-6 px-4 py-6 sm:px-6 lg:py-8">
@@ -239,10 +146,12 @@ export function LogsView({ trip, onTripChange }: Props) {
         </div>
         {!editing && (
           <div className="flex gap-2 self-start sm:self-auto">
-            <button type="button" className="btn btn-subtle" onClick={startEditing}>
-              <PencilSimpleIcon size={18} weight="bold" aria-hidden />
-              Edit Log
-            </button>
+            {canEdit && (
+              <button type="button" className="btn btn-subtle" onClick={() => d.start(log, driver)}>
+                <PencilSimpleIcon size={18} weight="bold" aria-hidden />
+                Edit Log
+              </button>
+            )}
             <button type="button" className="btn btn-primary" onClick={() => window.print()}>
               <PrinterIcon size={18} weight="bold" aria-hidden />
               Print All Logs
@@ -300,28 +209,36 @@ export function LogsView({ trip, onTripChange }: Props) {
             <p className="text-[13px] text-body">Drag across a row to draw that duty status. Drag a round handle to move a change.</p>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
-            <button type="button" className="icon-btn" onClick={undo} disabled={past.length === 0} aria-label="Undo" title="Undo (Ctrl+Z)">
+            <button type="button" className="icon-btn" onClick={undo} disabled={!d.canUndo} aria-label="Undo" title="Undo (Ctrl+Z)">
               <ArrowCounterClockwiseIcon size={18} weight="bold" aria-hidden />
             </button>
-            <button type="button" className="icon-btn" onClick={redo} disabled={future.length === 0} aria-label="Redo" title="Redo (Shift+Ctrl+Z)">
+            <button type="button" className="icon-btn" onClick={redo} disabled={!d.canRedo} aria-label="Redo" title="Redo (Shift+Ctrl+Z)">
               <ArrowClockwiseIcon size={18} weight="bold" aria-hidden />
             </button>
-            <button type="button" className="btn btn-subtle h-10 px-4" onClick={stopEditing} disabled={saving}>
+            <button type="button" className="btn btn-subtle h-10 px-4" onClick={d.stop} disabled={d.saving}>
               Cancel
             </button>
-            <button type="button" className="btn btn-primary h-10 px-4" onClick={save} disabled={saving}>
-              {saving && <SpinnerGapIcon size={16} weight="bold" className="animate-spin" aria-hidden />}
-              {saving ? 'Saving…' : 'Save Changes'}
+            <button type="button" className="btn btn-primary h-10 px-4" onClick={d.save} disabled={d.saving}>
+              {d.saving && <SpinnerGapIcon size={16} weight="bold" className="animate-spin" aria-hidden />}
+              {d.saving ? 'Saving…' : 'Save Changes'}
             </button>
           </div>
         </div>
       ) : (
-        log.edit && <EditedNotice trip={trip} index={index} onTripChange={onTripChange} />
+        <>
+          {log.edit && <EditedNotice key={index} trip={trip} index={index} canEdit={canEdit} onTripChange={onTripChange} />}
+          {!canEdit && (
+            <p className="no-print flex items-center gap-2 text-[14px] text-body">
+              <EyeIcon size={18} weight="bold" aria-hidden />
+              View only. The logs can be edited in the browser that planned this trip.
+            </p>
+          )}
+        </>
       )}
-      {error && (
+      {d.error && (
         <p role="alert" className="no-print flex items-center gap-2 rounded-2xl bg-danger-soft px-4 py-3 text-[14px] text-danger">
           <WarningCircleIcon size={18} weight="bold" aria-hidden />
-          {error}
+          {d.error}
         </p>
       )}
 
@@ -350,12 +267,12 @@ export function LogsView({ trip, onTripChange }: Props) {
             <LogSheet
               key={log.date}
               log={shown}
-              driver={shownDriver}
+              driver={draft?.driver ?? driver}
               dayCount={count}
               highlight={hover}
               animate={!editing}
-              editing={sheetEditing}
-              header={header}
+              editing={d.sheetEditing}
+              header={d.header}
             />
           </div>
         </div>
@@ -367,12 +284,13 @@ export function LogsView({ trip, onTripChange }: Props) {
       {draft ? (
         <LogEditor
           draft={draft}
-          onChange={setDraft}
-          onSnapshot={snapshot}
+          onChange={d.updateDraft}
+          onSnapshot={d.snapshot}
           preview={preview}
-          previewing={previewing}
-          reasonError={reasonError}
-          reasonRef={reasonRef}
+          previewing={d.previewing}
+          previewError={d.previewError}
+          reasonError={d.reasonError}
+          reasonRef={d.reasonRef}
           onHover={setHover}
         />
       ) : (
@@ -380,9 +298,7 @@ export function LogsView({ trip, onTripChange }: Props) {
           <div className="flex flex-col gap-3">
             <h2 className="text-[18px] font-bold tracking-[-0.01em]">Changes of duty status</h2>
             <ol className="flex flex-col">
-              {log.entries.map((entry, i) => {
-                const location = entry.location ?? log.remarks.find((r) => r.minute === entry.start)?.location
-                const label = entry.note && ['off_duty', 'sleeper', 'on_duty'].includes(entry.kind) ? entry.note : entry.kind === 'drive' ? 'Driving' : KIND[entry.kind].title
+              {viewEntries.map((entry, i) => {
                 return (
                   <li
                     key={i}
@@ -391,16 +307,16 @@ export function LogsView({ trip, onTripChange }: Props) {
                     className="grid grid-cols-[156px_1fr_auto] items-baseline gap-3 border-b border-hairline py-2.5 last:border-b-0"
                   >
                     <span className="tnum font-mono text-[13px] whitespace-nowrap text-body">
-                      {formatClock(log.date, entry.start)} - {formatClock(log.date, entry.end)}
+                      {formatMinuteOfDay(entry.start)} - {formatMinuteOfDay(entry.end)}
                     </span>
                     <span className="min-w-0">
                       <span className="flex items-center gap-2 text-[15px] font-medium">
                         <span className="size-2.5 shrink-0 rounded-full" style={{ background: DUTY[entry.status].color }} aria-hidden />
-                        <span className="truncate">{label}</span>
+                        <span className="truncate">{entryLabel(entry)}</span>
                         {entry.continued && <span className="text-[13px] font-normal text-mute">continued</span>}
                       </span>
                       <span className="block truncate text-[13px] text-body">
-                        {location || DUTY[entry.status].label}
+                        {entry.location || DUTY[entry.status].label}
                         {entry.kind === 'drive' && entry.miles ? `, ${entry.miles} mi` : ''}
                       </span>
                     </span>
@@ -419,30 +335,93 @@ export function LogsView({ trip, onTripChange }: Props) {
               <Recap label="Last 8 days, including today" value={formatHM(log.recap.last_8_days)} />
             </dl>
             <p className="text-[13px] text-body">
-              Hours used before the trip ({trip.summary.cycle_used_start} h) stay in the window until a 34-hour restart, since
-              their exact days are unknown.
+              Hours used before the trip ({trip.summary.cycle_used_start} h) are assumed to be as recent as possible, so
+              they count until they leave the window or a 34-hour restart clears them.
             </p>
           </aside>
         </section>
       )}
 
-      <div className="print-only">
-        {trip.logs.map((l) => (
-          <div key={l.date} className="print-sheet">
-            <LogSheet log={l} driver={driver} dayCount={count} animate={false} />
-          </div>
-        ))}
+      {printing && (
+        <div className="print-only">
+          {trip.logs.map((l) => (
+            <div key={l.date} className="print-sheet">
+              <LogSheet log={l} driver={driver} dayCount={count} animate={false} />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {blocker.state === 'blocked' && (
+        <LeaveDialog
+          onStay={() => blocker.reset()}
+          onLeave={() => {
+            d.stop()
+            blocker.proceed()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+function LeaveDialog({ onStay, onLeave }: { onStay: () => void; onLeave: () => void }) {
+  const stay = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    stay.current?.focus()
+    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onStay()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onStay])
+  return (
+    <div className="no-print fixed inset-0 z-50 flex items-center justify-center overscroll-contain bg-ink/40 p-4">
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="leave-title"
+        aria-describedby="leave-text"
+        className="w-full max-w-sm rounded-2xl bg-surface p-6 shadow-float"
+      >
+        <h2 id="leave-title" className="text-[18px] font-bold">
+          Discard unsaved changes?
+        </h2>
+        <p id="leave-text" className="mt-2 text-[15px] text-body">
+          Your edits to this log have not been saved.
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button ref={stay} type="button" className="btn btn-subtle" onClick={onStay}>
+            Keep Editing
+          </button>
+          <button type="button" className="btn bg-danger text-[#fefefd] hover:bg-danger/90" onClick={onLeave}>
+            Discard Changes
+          </button>
+        </div>
       </div>
     </div>
   )
 }
 
-function EditedNotice({ trip, index, onTripChange }: { trip: Trip; index: number; onTripChange: (trip: Trip) => void }) {
-  const edit = trip.logs[index].edit!
+const editedAt = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' })
+
+function EditedNotice({
+  trip,
+  index,
+  canEdit,
+  onTripChange,
+}: {
+  trip: Trip
+  index: number
+  canEdit: boolean
+  onTripChange: (trip: Trip) => void
+}) {
+  const log = trip.logs[index]
+  const edit = log.edit!
+  const editCount = log.edits?.length ?? 1
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
-  const when = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(edit.edited_at))
+  const date = new Date(edit.edited_at)
+  const when = Number.isNaN(date.getTime()) ? 'an earlier date' : editedAt.format(date)
 
   useEffect(() => {
     if (!confirming) return
@@ -466,12 +445,12 @@ function EditedNotice({ trip, index, onTripChange }: { trip: Trip; index: number
   return (
     <div className="no-print flex flex-col gap-3 rounded-2xl bg-soft px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
       <p className="min-w-0 text-[14px]">
-        <span className="font-semibold">Edited by driver</span>
-        <span className="text-body"> on {when}: </span>
+        <span className="font-semibold">Edited by driver{editCount > 1 ? ` ${editCount} times` : ''}</span>
+        <span className="text-body">, last on {when}: </span>
         <span className="break-words">{edit.reason}</span>
         {failed && <span className="block text-danger">Could not restore the planned log. Try again.</span>}
       </p>
-      {confirming ? (
+      {!canEdit ? null : confirming ? (
         <div className="flex shrink-0 gap-2">
           <button type="button" className="btn btn-ghost h-9 px-4 text-[14px]" onClick={() => setConfirming(false)} disabled={busy}>
             Keep Edits

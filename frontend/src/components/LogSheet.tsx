@@ -1,8 +1,9 @@
-import { memo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import type { DailyLog, DriverDetails, DutyStatus, LogEntry, LogRemark, SegmentKind } from '../lib/api'
-import { DUTY, DUTY_ORDER } from '../lib/duty'
+import { memo, type ReactNode } from 'react'
+import type { DailyLog, DriverDetails, DutyStatus, LogRemark, SegmentKind } from '../lib/api'
+import { DUTY_ORDER, NOTE_KINDS } from '../lib/duty'
 import { formatHM, formatNumber } from '../lib/format'
-import { DAY, STEP } from '../lib/logEdit'
+import { DANGER, FAINT, GB, GT, GX, H, HOUR, PAPER, PEN, PRINT, RB, RH, RULE, rowY, TX, W, x } from '../lib/sheetGeometry'
+import { EditLayer, type SheetEditing } from './LogEditLayer'
 
 /*
   A recreation of the FMCSA paper "Driver's Daily Log (24 hours)" from the
@@ -11,22 +12,6 @@ import { DAY, STEP } from '../lib/logEdit'
   duty status, shipping documents, and the 70-hour / 8-day recap.
 */
 
-const W = 1100
-const H = 860
-const GX = 136 // grid left
-const GW = 864 // 24 h x 36 px
-const HOUR = GW / 24
-const GT = 280 // grid top
-const RH = 34 // row height
-const GB = GT + RH * 4
-const TX = GX + GW // totals column left
-const RB = GB + 52 // remarks baseline
-
-const PAPER = '#fefefd'
-const PRINT = '#1b1b1b'
-const RULE = '#3b3b3b'
-const FAINT = '#8a8a86'
-const PEN = '#1f3a93'
 
 const ACTIVITY: Record<SegmentKind, [string, string]> = {
   pre_trip: ['Pre-trip inspection', 'Pre-trip'],
@@ -42,14 +27,12 @@ const ACTIVITY: Record<SegmentKind, [string, string]> = {
   sleeper: ['Sleeper berth', 'SB'],
   on_duty: ['On duty', 'On duty'],
 }
-const NOTE_KINDS: SegmentKind[] = ['off_duty', 'sleeper', 'on_duty']
 const VIOLATION_LABEL: Record<string, string> = {
   driving: 'Over 11 hr driving',
   window: 'Past 14-hr window',
   break: 'No 30-min break',
   cycle: 'Over 70-hr cycle',
 }
-const DANGER = '#c0262d'
 const LINE_CHARS = 30
 
 function clip(text: string) {
@@ -63,19 +46,9 @@ const ROW_LABEL: Record<DutyStatus, [string, string?]> = {
   on_duty: ['4. On Duty', '(not driving)'],
 }
 
-const x = (minute: number) => GX + (minute / 60) * HOUR
-const rowY = (status: DutyStatus) => GT + DUTY_ORDER.indexOf(status) * RH + RH / 2
 
-export interface SheetEditing {
-  /** Called once when a drag or key edit begins (records undo, fixes the drag base). */
-  onEditStart: () => void
-  onEditEnd: () => void
-  onPaint: (status: DutyStatus, from: number, to: number) => void
-  onMoveBoundary: (index: number, minute: number) => void
-  onNudgeBoundary: (index: number, delta: number) => void
-  onMoveSegment: (index: number, status: DutyStatus) => void
-  onNudgeSegment: (index: number, direction: 1 | -1) => void
-}
+
+export type { SheetEditing } from './LogEditLayer'
 
 export type DayField = 'from' | 'to' | 'miles' | 'totalMileage'
 
@@ -536,262 +509,6 @@ function RecapCell({ x1, y = 770, prefix, value, lines }: { x1: number; y?: numb
           {line}
         </text>
       ))}
-    </g>
-  )
-}
-
-function toSvg(svg: SVGSVGElement, clientX: number, clientY: number) {
-  const matrix = svg.getScreenCTM()
-  return matrix ? new DOMPoint(clientX, clientY).matrixTransform(matrix.inverse()) : new DOMPoint(0, 0)
-}
-
-function minuteAt(event: ReactPointerEvent<SVGElement>) {
-  const svg = event.currentTarget.ownerSVGElement
-  if (!svg) return 0
-  const point = toSvg(svg, event.clientX, event.clientY)
-  return Math.min(DAY - STEP, Math.max(0, Math.floor(((point.x - GX) / HOUR) * 4) * STEP))
-}
-
-function statusAtY(y: number): DutyStatus {
-  const row = Math.min(DUTY_ORDER.length - 1, Math.max(0, Math.floor((y - GT) / RH)))
-  return DUTY_ORDER[row]
-}
-
-function clock(minute: number) {
-  if (minute >= DAY) return 'Midnight'
-  const h = Math.floor(minute / 60) % 24
-  const m = minute % 60
-  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`
-}
-
-/**
- * Follows a drag at the window level. Handles and line pieces can disappear
- * while dragging (neighbors on the same status merge), which would drop an
- * element-level pointer capture.
- */
-function followDrag(svg: SVGSVGElement, onMove: (p: DOMPoint) => void, onEnd: () => void) {
-  const move = (e: PointerEvent) => onMove(toSvg(svg, e.clientX, e.clientY))
-  const end = () => {
-    window.removeEventListener('pointermove', move)
-    window.removeEventListener('pointerup', end)
-    window.removeEventListener('pointercancel', end)
-    onEnd()
-  }
-  window.addEventListener('pointermove', move)
-  window.addEventListener('pointerup', end)
-  window.addEventListener('pointercancel', end)
-}
-
-type Drag = { type: 'boundary'; minute: number } | { type: 'segment'; status: DutyStatus; y: number }
-
-/**
- * Drawing tools over the grid:
- * - drag across a row to put that period on that duty status,
- * - drag a piece of the line up or down to change its status,
- * - drag a round handle sideways to move a change (onto another change removes the piece between).
- * Handles and pieces also work with the arrow keys. Times snap to 15 minutes.
- */
-function EditLayer({ entries, editing }: { entries: LogEntry[]; editing: SheetEditing }) {
-  const [paint, setPaint] = useState<{ status: DutyStatus; anchor: number; current: number } | null>(null)
-  const [hover, setHover] = useState<number | null>(null)
-  const [drag, setDrag] = useState<Drag | null>(null)
-
-  const range = paint && { from: Math.min(paint.anchor, paint.current), to: Math.max(paint.anchor, paint.current) + STEP }
-
-  function startBoundaryDrag(e: ReactPointerEvent<SVGElement>, index: number) {
-    const svg = e.currentTarget.ownerSVGElement
-    if (!svg) return
-    e.preventDefault()
-    editing.onEditStart()
-    setDrag({ type: 'boundary', minute: entries[index].start })
-    followDrag(
-      svg,
-      (p) => {
-        const minute = ((p.x - GX) / HOUR) * 60
-        setDrag({ type: 'boundary', minute: Math.min(DAY, Math.max(0, Math.round(minute / STEP) * STEP)) })
-        editing.onMoveBoundary(index, minute)
-      },
-      () => {
-        setDrag(null)
-        editing.onEditEnd()
-      },
-    )
-  }
-
-  function startSegmentDrag(e: ReactPointerEvent<SVGElement>, index: number) {
-    const svg = e.currentTarget.ownerSVGElement
-    if (!svg) return
-    e.preventDefault()
-    editing.onEditStart()
-    const entry = entries[index]
-    setDrag({ type: 'segment', status: entry.status, y: rowY(entry.status) })
-    followDrag(
-      svg,
-      (p) => {
-        const status = statusAtY(p.y)
-        setDrag({ type: 'segment', status, y: Math.min(GB, Math.max(GT, p.y)) })
-        editing.onMoveSegment(index, status)
-      },
-      () => {
-        setDrag(null)
-        editing.onEditEnd()
-      },
-    )
-  }
-
-  return (
-    <g>
-      {DUTY_ORDER.map((status, i) => (
-        <rect
-          key={status}
-          x={GX}
-          y={GT + i * RH}
-          width={GW}
-          height={RH}
-          fill="transparent"
-          style={{ cursor: 'crosshair', touchAction: 'none' }}
-          aria-hidden
-          onPointerDown={(e) => {
-            e.currentTarget.setPointerCapture(e.pointerId)
-            const m = minuteAt(e)
-            setPaint({ status, anchor: m, current: m })
-          }}
-          onPointerMove={(e) => {
-            const m = minuteAt(e)
-            setHover(m)
-            if (paint) setPaint({ ...paint, current: m })
-          }}
-          onPointerLeave={() => setHover(null)}
-          onPointerUp={() => {
-            if (paint && range) {
-              editing.onEditStart()
-              editing.onPaint(paint.status, range.from, range.to)
-              editing.onEditEnd()
-            }
-            setPaint(null)
-          }}
-          onPointerCancel={() => setPaint(null)}
-        />
-      ))}
-
-      {hover != null && !paint && !drag && (
-        <g pointerEvents="none">
-          <line x1={x(hover)} x2={x(hover)} y1={GT} y2={GB} stroke={PEN} strokeWidth={1} strokeDasharray="3 3" />
-          <rect x={x(hover) - 30} y={GT - 50} width={60} height={18} rx={9} fill={PEN} />
-          <text x={x(hover)} y={GT - 37} fill={PAPER} fontSize={10.5} fontWeight={600} textAnchor="middle">
-            {clock(hover)}
-          </text>
-        </g>
-      )}
-
-      {paint && range && (
-        <g pointerEvents="none">
-          <rect
-            x={x(range.from)}
-            y={rowY(paint.status) - RH / 2 + 3}
-            width={x(range.to) - x(range.from)}
-            height={RH - 6}
-            rx={4}
-            fill={PEN}
-            opacity={0.22}
-          />
-          <rect x={x(range.from) - 2} y={GT - 54} width={Math.max(150, x(range.to) - x(range.from) + 4)} height={22} rx={11} fill={PEN} />
-          <text x={x(range.from) + 8} y={GT - 39} fill={PAPER} fontSize={11} fontWeight={600}>
-            {DUTY[paint.status].label}: {clock(range.from)} - {clock(range.to)}
-          </text>
-        </g>
-      )}
-
-      {/* Pieces of the line: drag up or down to change status. */}
-      {entries.map((entry, index) => {
-        const x1 = x(entry.start)
-        const x2 = x(entry.end)
-        const y = rowY(entry.status)
-        const row = DUTY_ORDER.indexOf(entry.status)
-        return (
-          <g
-            key={`seg-${index}`}
-            role="slider"
-            tabIndex={0}
-            aria-orientation="vertical"
-            aria-label={`${DUTY[entry.status].label}, ${clock(entry.start)} to ${clock(entry.end)}. Up and down arrows change the status.`}
-            aria-valuemin={1}
-            aria-valuemax={4}
-            aria-valuenow={row + 1}
-            aria-valuetext={DUTY[entry.status].label}
-            className="log-segment"
-            style={{ cursor: 'ns-resize', touchAction: 'none', outline: 'none' }}
-            onPointerDown={(e) => startSegmentDrag(e, index)}
-            onKeyDown={(e) => {
-              const direction = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0
-              if (!direction) return
-              e.preventDefault()
-              editing.onEditStart()
-              editing.onNudgeSegment(index, direction)
-              editing.onEditEnd()
-            }}
-          >
-            <rect x={x1 + 4} y={y - 8} width={Math.max(0, x2 - x1 - 8)} height={16} fill="transparent" />
-            <rect className="log-segment-glow" x={x1} y={y - 4} width={x2 - x1} height={8} rx={4} fill={PEN} pointerEvents="none" />
-          </g>
-        )
-      })}
-
-      {drag?.type === 'segment' && (
-        <g pointerEvents="none">
-          <rect x={24} y={GT + DUTY_ORDER.indexOf(drag.status) * RH} width={GX - 24} height={RH} fill={PEN} opacity={0.12} />
-          <rect x={GX - 4} y={drag.y - 11} width={130} height={22} rx={11} fill={PEN} />
-          <text x={GX + 6} y={drag.y + 4} fill={PAPER} fontSize={11} fontWeight={600}>
-            Move to {DUTY[drag.status].label}
-          </text>
-        </g>
-      )}
-
-      {/* Change points: drag sideways to move. */}
-      {entries.slice(1).map((entry, k) => {
-        const index = k + 1
-        const prev = entries[index - 1]
-        const hx = x(entry.start)
-        const y1 = Math.min(rowY(prev.status), rowY(entry.status))
-        const y2 = Math.max(rowY(prev.status), rowY(entry.status))
-        const active = drag?.type === 'boundary' && Math.abs(drag.minute - entry.start) < STEP
-        return (
-          <g
-            key={`pt-${index}`}
-            role="slider"
-            tabIndex={0}
-            aria-label={`Change from ${DUTY[prev.status].label} to ${DUTY[entry.status].label}`}
-            aria-valuemin={prev.start}
-            aria-valuemax={entry.end}
-            aria-valuenow={entry.start}
-            aria-valuetext={clock(entry.start)}
-            className="log-handle"
-            style={{ cursor: 'ew-resize', touchAction: 'none', outline: 'none' }}
-            onPointerDown={(e) => startBoundaryDrag(e, index)}
-            onKeyDown={(e) => {
-              const delta = e.key === 'ArrowLeft' ? -STEP : e.key === 'ArrowRight' ? STEP : 0
-              if (!delta) return
-              e.preventDefault()
-              editing.onEditStart()
-              editing.onNudgeBoundary(index, delta * (e.shiftKey ? 4 : 1))
-              editing.onEditEnd()
-            }}
-          >
-            <rect x={hx - 7} y={y1 - 10} width={14} height={y2 - y1 + 20} fill="transparent" />
-            <circle className="log-handle-knob" cx={hx} cy={(y1 + y2) / 2} r={active ? 7 : 5.5} fill={PAPER} stroke={PEN} strokeWidth={2.5} />
-          </g>
-        )
-      })}
-
-      {drag?.type === 'boundary' && (
-        <g pointerEvents="none">
-          <line x1={x(drag.minute)} x2={x(drag.minute)} y1={GT} y2={GB} stroke={PEN} strokeWidth={1} strokeDasharray="3 3" />
-          <rect x={x(drag.minute) - 30} y={GT - 50} width={60} height={18} rx={9} fill={PEN} />
-          <text x={x(drag.minute)} y={GT - 37} fill={PAPER} fontSize={10.5} fontWeight={600} textAnchor="middle">
-            {clock(drag.minute)}
-          </text>
-        </g>
-      )}
     </g>
   )
 }

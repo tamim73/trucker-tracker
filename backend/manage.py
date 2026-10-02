@@ -7,6 +7,9 @@ import sys
 def main():
     """Run administrative tasks."""
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+    # Local development runs with DEBUG on. Production sets DJANGO_DEBUG=0
+    # explicitly and serves through gunicorn (config/wsgi.py).
+    os.environ.setdefault('DJANGO_DEBUG', '1')
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:

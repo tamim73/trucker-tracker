@@ -1,5 +1,5 @@
 import { CaretDownIcon, CrosshairIcon, MinusIcon, PlusIcon, SpinnerGapIcon, WarningCircleIcon } from '@phosphor-icons/react'
-import { useId, useState, type FormEvent, type ReactNode } from 'react'
+import { useId, useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from 'react'
 import { api, type DriverDetails, type PlaceDraft, type TripRequest } from '../lib/api'
 import { DRIVER_FIELDS } from '../lib/driver'
 import { formatNumber } from '../lib/format'
@@ -18,7 +18,9 @@ export interface FormState {
 
 interface Props {
   value: FormState
-  onChange: (value: FormState) => void
+  /** Accepts an updater so async results (geolocation) apply to the latest form. */
+  onChange: Dispatch<SetStateAction<FormState>>
+  onForgetDriver: () => void
   onSubmit: (request: TripRequest) => void
   submitting: boolean
   serverError?: string
@@ -27,8 +29,8 @@ interface Props {
 }
 
 
-export function TripForm({ value, onChange, onSubmit, submitting, serverError, fieldErrors = {}, onLoadSample }: Props) {
-  const ids = { cycle: useId(), departure: useId(), cycleHelp: useId() }
+export function TripForm({ value, onChange, onSubmit, submitting, serverError, fieldErrors = {}, onLoadSample, onForgetDriver }: Props) {
+  const ids = { cycle: useId(), departure: useId(), cycleHelp: useId(), departureHelp: useId() }
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [locating, setLocating] = useState(false)
   const allErrors = { ...fieldErrors, ...errors }
@@ -38,7 +40,7 @@ export function TripForm({ value, onChange, onSubmit, submitting, serverError, f
   const available = cycleValid ? 70 - cycle : null
 
   function setPlace(role: Role, place: PlaceDraft) {
-    onChange({ ...value, [role]: place })
+    onChange((v) => ({ ...v, [role]: place }))
     if (errors[role]) {
       setErrors((prev) => {
         const next = { ...prev }
@@ -50,10 +52,10 @@ export function TripForm({ value, onChange, onSubmit, submitting, serverError, f
 
   function setCycle(next: number) {
     const clamped = Math.min(70, Math.max(0, Math.round(next * 4) / 4))
-    onChange({ ...value, cycle: String(clamped) })
+    onChange((v) => ({ ...v, cycle: String(clamped) }))
   }
 
-  function useMyLocation() {
+  function locateMe() {
     if (!('geolocation' in navigator)) {
       setErrors((e) => ({ ...e, current: 'This browser cannot share its location. Type a city instead.' }))
       return
@@ -126,7 +128,7 @@ export function TripForm({ value, onChange, onSubmit, submitting, serverError, f
               <button
                 type="button"
                 className="icon-btn size-9"
-                onClick={useMyLocation}
+                onClick={locateMe}
                 aria-label="Use my current location"
                 title="Use my current location"
                 disabled={locating}
@@ -177,7 +179,7 @@ export function TripForm({ value, onChange, onSubmit, submitting, serverError, f
               step={0.25}
               autoComplete="off"
               value={value.cycle}
-              onChange={(e) => onChange({ ...value, cycle: e.target.value })}
+              onChange={(e) => onChange((v) => ({ ...v, cycle: e.target.value }))}
               aria-describedby={ids.cycleHelp}
               aria-invalid={Boolean(allErrors.cycle_used_hours)}
               className="tnum w-full min-w-0 bg-transparent text-center font-mono text-[17px] font-medium outline-none focus-visible:outline-none"
@@ -220,11 +222,12 @@ export function TripForm({ value, onChange, onSubmit, submitting, serverError, f
             step={900}
             autoComplete="off"
             value={value.departure}
-            onChange={(e) => onChange({ ...value, departure: e.target.value })}
+            onChange={(e) => onChange((v) => ({ ...v, departure: e.target.value }))}
             aria-invalid={Boolean(allErrors.departure)}
+            aria-describedby={ids.departureHelp}
             className="tnum h-12 w-full rounded-[10px] bg-soft px-3.5 text-[16px] text-ink outline-none focus-visible:shadow-[inset_0_0_0_2px_var(--ink)] focus-visible:outline-none"
           />
-          <p className={`text-[13px] ${allErrors.departure ? 'text-danger' : 'text-body'}`}>
+          <p id={ids.departureHelp} className={`text-[13px] ${allErrors.departure ? 'text-danger' : 'text-body'}`}>
             {allErrors.departure ?? 'Logs run midnight to midnight in this time.'}
           </p>
         </div>
@@ -244,9 +247,15 @@ export function TripForm({ value, onChange, onSubmit, submitting, serverError, f
               key={field.key}
               field={field}
               value={value.driver[field.key]}
-              onChange={(v) => onChange({ ...value, driver: { ...value.driver, [field.key]: v } })}
+              onChange={(text) => onChange((v) => ({ ...v, driver: { ...v.driver, [field.key]: text } }))}
             />
           ))}
+          <p className="text-[13px] text-body sm:col-span-2">
+            Saved in this browser for your next trip.{' '}
+            <button type="button" className="font-medium text-ink underline underline-offset-2" onClick={onForgetDriver}>
+              Forget saved details
+            </button>
+          </p>
         </div>
       </details>
 

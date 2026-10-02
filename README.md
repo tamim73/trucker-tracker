@@ -22,7 +22,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173. Vite proxies `/api` to Django. Click **Load Sample Trip** for a three-day example.
+Open http://localhost:5173. Vite proxies `/api` to Django. Click **Load Sample Trip** for a three-day example. `manage.py` turns `DJANGO_DEBUG` on for local development; everything else defaults to production settings.
 
 ### Single service (production)
 
@@ -33,13 +33,27 @@ cd ../backend && DJANGO_DEBUG=0 DJANGO_SECRET_KEY=change-me DJANGO_ALLOWED_HOSTS
 
 Django serves the built React app (WhiteNoise) and the API from one process.
 
-The root `Dockerfile` does both steps and is what Railway builds. Variables: `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`, and `DJANGO_DB_PATH` pointing at a mounted volume (e.g. `/data/db.sqlite3`) so saved trips survive redeploys.
+The root `Dockerfile` does both steps and is what Railway builds.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DJANGO_SECRET_KEY` | none, required when DEBUG is off | Django signing key |
+| `DJANGO_DEBUG` | `0` (`manage.py` sets `1`) | Debug mode |
+| `DJANGO_ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1]` | Host names the app answers to |
+| `DJANGO_DB_PATH` | `backend/db.sqlite3` | SQLite file; point it at a mounted volume (e.g. `/data/db.sqlite3`) |
+| `DJANGO_SECURE_SSL_REDIRECT` | `1` when DEBUG is off | Redirect HTTP to HTTPS behind the platform proxy |
+| `TRUSTED_PROXY_COUNT` | `1` when DEBUG is off | Proxy hops in `X-Forwarded-For`, used to rate limit per client IP |
+| `PHOTON_URL`, `OSRM_URL` | public instances | Geo services; point at self-hosted ones for real traffic |
+| `GEO_READ_TIMEOUT_SECONDS`, `GEO_LABEL_BUDGET_SECONDS` | `10`, `15` | Per-call timeout and total time for naming stops |
 
 ### Tests
 
 ```bash
 cd backend && .venv/bin/python manage.py test trips
+cd frontend && npm test
 ```
+
+The backend suite covers the planner, log sheets, the hours-of-service check, edits and their authorization, input validation and geo-service failures. The frontend suite covers the log-editing operations.
 
 ## How the plan is built
 
@@ -54,7 +68,7 @@ cd backend && .venv/bin/python manage.py test trips
 | Fuel at least every 1,000 miles | Trip assumption | 30 minutes on duty. Merged with a due 30-minute break after 650 miles |
 | 1 hour for pickup and drop-off | Trip assumption | 1 hour on duty, not driving |
 
-Other assumptions: the driver starts rested, does a 15-minute pre-trip inspection each duty day and a post-trip inspection at delivery, and drives at the OSRM road estimate capped at a 60 mph average. Hours already used in the cycle stay in the 8-day window for the whole trip (their exact days are unknown), until a 34-hour restart clears them.
+Other assumptions: the driver starts rested, does a 15-minute pre-trip inspection at the start of each duty day and a post-trip inspection at delivery, and drives at the OSRM road estimate capped at a 60 mph average. Departure is rounded up to the next 15-minute mark. Hours already used in the cycle have unknown dates, so they are treated as recent as possible: the planner keeps them for the whole trip, and the recap drops them only once they must have left the 7- and 8-day windows, unless a 34-hour restart clears them first.
 
 `logs.py` splits the timeline into midnight-to-midnight sheets (each totals 24:00), records the city and state at every change of duty status, fills the 70-hour / 8-day recap, and independently re-checks the plan. The result is shown as the "Hours of service check" on the route page.
 
@@ -70,7 +84,23 @@ On the logs page, **Edit Log** opens the sheet for changes:
 - The header and shipping fields are typed straight onto the sheet: From, To, total miles driving, total mileage, truck and trailer numbers, carrier, office and terminal addresses, driver, co-driver, shipping document and commodity. From, To and mileage are per day; the rest apply to every sheet.
 - Undo and redo (Ctrl+Z, Shift+Ctrl+Z) for the duty status line.
 
-While editing, the server recomputes totals, remarks, the 70-hour recap and hours-of-service violations, and the sheet marks any driving that breaks a limit in red. Saving requires a reason, which is stored and printed on the sheet, as ELD rules require for edits (395.30). Later days are rechecked too, since a short rest carries over. **Restore Planned Log** brings back the original plan for that day.
+While editing, the server recomputes totals, remarks, the 70-hour recap and hours-of-service violations, and the sheet marks any driving that breaks a limit in red. Saving requires a reason, which is stored and printed on the sheet, as ELD rules require for edits (395.30); every edit is kept in the day's history. Later days are rechecked too, since a short rest carries over. **Restore Planned Log** brings back the original plan for that day. Leaving the page with unsaved edits asks first.
+
+## Security model
+
+- There are no accounts. A trip's link is read-only. Creating a trip returns an edit token once; the creating browser keeps it and sends it as `X-Edit-Token` to edit or restore logs. Anyone else with the link gets a view-only page, and the API answers 403.
+- Only validated fields are stored, request bodies are capped at 64 KB, places must be in the United States, and every endpoint that calls a geo service is rate limited per client IP.
+- Production runs with DEBUG off, a required secret key, HTTPS redirect, HSTS, a Content-Security-Policy, `X-Frame-Options: DENY` and no-sniff headers. Errors are logged to stdout.
+- Log edits run in a database transaction, so concurrent edits to one trip cannot overwrite each other.
+- CSRF middleware is not used on purpose: there are no cookies or sessions, and edits are authorized by a custom header that another origin cannot send without a CORS preflight, which the API does not allow.
+
+## Known limits
+
+- Split sleeper-berth periods (395.1(g), 7/3 and 8/2) are not modeled. A legal split entered as an edit shows as a violation.
+- Edits change the logs, not the route. Fuel and dock checks on the route page describe the plan and say so once logs are edited.
+- Trips are kept indefinitely; a production system would expire old ones.
+- The rate limiter's counters live in each worker's memory, so the effective limit is per worker. A shared cache (e.g. Redis) would make it exact.
+- The public Photon and OSRM servers are for light use. Real traffic needs self-hosted or paid instances.
 
 ## API
 
@@ -78,11 +108,12 @@ While editing, the server recomputes totals, remarks, the 70-hour recap and hour
 |---|---|---|
 | GET | `/api/places/search?q=` | US place autocomplete |
 | GET | `/api/places/reverse?lat=&lon=` | "City, ST" for a coordinate |
-| POST | `/api/trips` | Plan and save a trip |
+| POST | `/api/trips` | Plan and save a trip; the response includes the edit token |
 | GET | `/api/trips/<id>` | Fetch a saved trip |
-| PUT | `/api/trips/<id>/logs/<day>` | Save a driver's edit of one daily log (entries, miles, total mileage, from, to, reason, driver details) |
-| POST | `/api/trips/<id>/logs/<day>/preview` | Recompute totals, recap and violations for an unsaved edit |
-| DELETE | `/api/trips/<id>/logs/<day>` | Restore the planned log for that day |
+| PUT | `/api/trips/<id>/logs/<day>` | Save an edit of one daily log (entries, miles, total mileage, from, to, reason, driver details). Needs `X-Edit-Token` |
+| POST | `/api/trips/<id>/logs/<day>/preview` | Recompute totals, recap and violations for an unsaved edit. Needs `X-Edit-Token` |
+| DELETE | `/api/trips/<id>/logs/<day>` | Restore the planned log for that day. Needs `X-Edit-Token` |
+| GET | `/api/health` | Liveness and database check |
 
 `POST /api/trips` body:
 
@@ -101,4 +132,4 @@ Places without coordinates are geocoded. `departure` is wall-clock time at the h
 
 ## Design
 
-UI follows the Uber DESIGN.md from [awesome-design-md](https://github.com/VoltAgent/awesome-design-md) (black-and-white transportation language, pill controls, ride-request style form), adjusted with the [taste skill](https://github.com/Leonxlnx/taste-skill) and audited against Vercel's [Web Interface Guidelines](https://github.com/vercel-labs/web-interface-guidelines). Light and dark themes, keyboard accessible, printable logs (one sheet per page).
+UI follows the Uber DESIGN.md from [awesome-design-md](https://github.com/VoltAgent/awesome-design-md) (black-and-white transportation language, pill controls, ride-request style form), adjusted with the [taste skill](https://github.com/Leonxlnx/taste-skill) and audited against Vercel's [Web Interface Guidelines](https://github.com/vercel-labs/web-interface-guidelines). Keyboard accessible, printable logs (one sheet per page).

@@ -13,22 +13,26 @@ interface Props {
   view: 'route' | 'logs'
 }
 
+/** Shows the copy cached in this session right away, then refreshes it from
+ *  the server so edits made elsewhere are picked up. */
 function useTrip(id: string | undefined) {
-  const [trip, setTrip] = useState<Trip | null>(null)
-  const [error, setError] = useState<ApiError | null>(null)
+  const [loaded, setLoaded] = useState<Trip | null>(null)
+  const [failure, setFailure] = useState<{ id: string; error: ApiError } | null>(null)
   useEffect(() => {
     if (!id) return
-    let alive = true
-    setError(null)
+    const controller = new AbortController()
     api
-      .getTrip(id)
-      .then((t) => alive && setTrip(t))
-      .catch((err) => alive && setError(err instanceof ApiError ? err : new ApiError('Could not load this trip.', 0)))
-    return () => {
-      alive = false
-    }
+      .getTrip(id, controller.signal)
+      .then(setLoaded)
+      .catch((err) => {
+        if (controller.signal.aborted) return
+        setFailure({ id, error: err instanceof ApiError ? err : new ApiError('Could not load this trip.', 0) })
+      })
+    return () => controller.abort()
   }, [id])
-  return { trip: trip?.id === id ? trip : null, error, setTrip }
+  const trip = loaded?.id === id ? loaded : id ? (api.cachedTrip(id) ?? null) : null
+  const error = failure && failure.id === id && !trip ? failure.error : null
+  return { trip, error, setTrip: setLoaded }
 }
 
 export function TripPage({ view }: Props) {
@@ -56,7 +60,6 @@ function RouteView({ trip }: { trip: Trip }) {
   const [active, setActive] = useState<number | null>(null)
   const [copied, setCopied] = useState(false)
   const stops = useMemo(() => trip.segments.filter((s) => MAP_STOP_KINDS.includes(s.kind)), [trip.segments])
-  const places = useMemo(() => trip.places, [trip.places])
   const label = useCallback(
     (s: Segment) => `${stopTitle(s)}, ${formatDayClock(trip.summary.start_date, s.start)}`,
     [trip.summary.start_date],
@@ -94,7 +97,7 @@ function RouteView({ trip }: { trip: Trip }) {
       </div>
       <div className="relative order-1 h-[42vh] min-h-[280px] lg:order-2 lg:h-auto">
         <TripMap
-          places={places}
+          places={trip.places}
           legs={trip.route.legs}
           stops={stops}
           activeStopId={active}
@@ -138,9 +141,7 @@ function RouteSkeleton() {
         <div className="skeleton h-44 rounded-2xl" />
         <div className="skeleton h-64 rounded-2xl" />
       </div>
-      <div className="order-1 h-[42vh] lg:order-2 lg:h-auto">
-        <TripMap places={{}} className="h-full" />
-      </div>
+      <div className="skeleton order-1 h-[42vh] lg:order-2 lg:h-auto" aria-hidden />
     </main>
   )
 }

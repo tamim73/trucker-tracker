@@ -1,10 +1,12 @@
 import type { DailyLog, DutyStatus, LogEntry } from './api'
 import { GENERIC_KIND } from './duty'
+import { DAY } from './format'
+
+export { DAY }
 
 /** Pure edits on one day's duty status entries. All times are minutes from
  *  midnight on the 15-minute grid, and entries always cover 0 to 1440. */
 
-export const DAY = 1440
 export const STEP = 15
 
 export const snap = (minute: number) => Math.min(DAY, Math.max(0, Math.round(minute / STEP) * STEP))
@@ -97,6 +99,19 @@ export function updateEntry(entries: LogEntry[], index: number, patch: Partial<P
   const next = [...entries]
   next[index] = { ...next[index], ...patch }
   return next
+}
+
+/**
+ * Adds a change of duty status halfway through entries[index]: the second
+ * half gets a different status, which the driver can then set. Gives keyboard
+ * and screen-reader users a way to add a period without drawing.
+ */
+export function insertChange(entries: LogEntry[], index: number): LogEntry[] {
+  const e = entries[index]
+  if (!e || e.end - e.start < 2 * STEP) return entries
+  const mid = Math.round((e.start + e.end) / 2 / STEP) * STEP
+  const status: DutyStatus = e.status === 'on_duty' ? 'off_duty' : 'on_duty'
+  return paint(entries, status, mid, e.end)
 }
 
 export function removeEntry(entries: LogEntry[], index: number): LogEntry[] {

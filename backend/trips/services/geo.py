@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 
 import requests
 from django.conf import settings
@@ -35,18 +35,38 @@ STATE_ABBR = {
 
 CITY_TYPES = {"city", "town", "village", "hamlet", "locality", "district"}
 
+# (west, south, east, north): contiguous US, Alaska, Hawaii. FMCSA hours-of-service
+# rules apply to US trips, so places outside these boxes are rejected.
+US_BOUNDS = (
+    (-125.0, 24.3, -66.8, 49.5),
+    (-170.0, 51.0, -129.0, 71.6),
+    (-160.6, 18.8, -154.7, 22.4),
+)
+
+
+def in_us(lat: float, lon: float) -> bool:
+    return any(w <= lon <= e and s <= lat <= n for w, s, e, n in US_BOUNDS)
+
 
 class GeoError(Exception):
     """Raised when a place or route cannot be resolved."""
 
 
-def _get(url: str, params) -> dict:
+def _get(url: str, params, *, json_errors: bool = False) -> dict:
+    """GET JSON from a geo service. With ``json_errors``, 4xx responses that
+    carry a JSON body (OSRM's "NoRoute") are returned instead of raised, so
+    callers can tell "no answer" apart from "service down"."""
     response = requests.get(
         url,
         params=params,
         headers={"User-Agent": settings.GEO_USER_AGENT, "Accept-Language": "en"},
-        timeout=settings.GEO_TIMEOUT_SECONDS,
+        timeout=settings.GEO_TIMEOUT,
     )
+    if json_errors and 400 <= response.status_code < 500:
+        try:
+            return response.json()
+        except ValueError:
+            pass
     response.raise_for_status()
     return response.json()
 
@@ -119,10 +139,9 @@ def search_places(query: str, limit: int = 6) -> list[dict]:
 
 
 def geocode(query: str) -> dict:
-    try:
-        results = search_places(query, limit=1)
-    except requests.RequestException as exc:
-        raise GeoError("The place search service is not responding. Try again in a moment.") from exc
+    """Best US match for free text. Service failures raise RequestException
+    (reported as 503); a query with no match raises GeoError (422)."""
+    results = search_places(query, limit=1)
     if not results:
         raise GeoError(f"No US location matches “{query}”. Try a city and state, like “Joliet, IL”.")
     return results[0]
@@ -163,10 +182,24 @@ def reverse_label(lon: float, lat: float) -> str:
 
 
 def label_many(coords: list[tuple[float, float]]) -> dict[tuple[float, float], str]:
+    """Labels stops in parallel within a fixed time budget. Stops not labeled in
+    time keep a coordinate label, so a slow geocoder cannot stall the request."""
     unique = list(dict.fromkeys((round(lon, 4), round(lat, 4)) for lon, lat in coords))
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        labels = list(pool.map(lambda c: reverse_label(*c), unique))
-    return dict(zip(unique, labels))
+    labels = {c: f"{c[1]:.3f}, {c[0]:.3f}" for c in unique}
+    if not unique:
+        return labels
+    pool = ThreadPoolExecutor(max_workers=6)
+    futures = {pool.submit(reverse_label, *c): c for c in unique}
+    done, pending = wait(futures, timeout=settings.GEO_LABEL_BUDGET_SECONDS)
+    pool.shutdown(wait=False, cancel_futures=True)
+    for future in done:
+        try:
+            labels[futures[future]] = future.result()
+        except Exception:  # a bad response for one stop must not fail the trip
+            log.exception("Labeling a stop failed")
+    if pending:
+        log.warning("Labeled %d of %d stops within the time budget", len(done), len(unique))
+    return labels
 
 
 # -- routing ----------------------------------------------------------------
@@ -216,26 +249,27 @@ def route_leg(origin: dict, destination: dict) -> tuple[Leg, bool]:
         data = _get(
             f"{settings.OSRM_URL}/route/v1/driving/{a[0]},{a[1]};{b[0]},{b[1]}",
             {"overview": "full", "geometries": "geojson", "steps": "false"},
+            json_errors=True,
         )
-        if data.get("code") != "Ok" or not data.get("routes"):
-            raise GeoError(
-                f"No drivable route between {origin['label']} and {destination['label']}."
-            )
-        route = data["routes"][0]
-        geometry = simplify([tuple(p) for p in route["geometry"]["coordinates"]])
-        leg = Leg(
-            origin["label"],
-            destination["label"],
-            route["distance"] / METERS_PER_MILE,
-            route["duration"] / 60,
-            [(round(x, 5), round(y, 5)) for x, y in geometry],
-        )
-        cache.set(key, leg.__dict__)
-        return leg, False
     except requests.RequestException:
+        # Only a service outage falls back to an estimate; "no route" does not.
         log.warning("Routing service unavailable, estimating %s -> %s", origin["label"], destination["label"])
         miles = haversine_miles(a, b) * ROAD_FACTOR
         return Leg(origin["label"], destination["label"], miles, miles / FALLBACK_SPEED_MPH * 60, [a, b]), True
+
+    if data.get("code") != "Ok" or not data.get("routes"):
+        raise GeoError(f"No drivable route between {origin['label']} and {destination['label']}.")
+    route = data["routes"][0]
+    geometry = simplify([tuple(p) for p in route["geometry"]["coordinates"]])
+    leg = Leg(
+        origin["label"],
+        destination["label"],
+        route["distance"] / METERS_PER_MILE,
+        route["duration"] / 60,
+        [(round(x, 5), round(y, 5)) for x, y in geometry],
+    )
+    cache.set(key, leg.__dict__)
+    return leg, False
 
 
 def route_trip(current: dict, pickup: dict, dropoff: dict) -> tuple[list[Leg], bool]:

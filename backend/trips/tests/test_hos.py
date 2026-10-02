@@ -1,9 +1,10 @@
-from datetime import date
+from datetime import date, datetime
 
 from django.test import SimpleTestCase
 
 from trips.services.hos import DRIVING, ON_DUTY, SLEEPER, HosRules, Leg, TripPlanner
-from trips.services.logs import DAY, build_daily_logs, compliance_report
+from trips.services.logs import DAY, build_daily_logs, compliance_report, hos_check, refresh_logs, Record
+from trips.services.trip import round_departure
 
 GEOMETRY = [(-87.63, 41.88), (-86.16, 39.77), (-104.99, 39.74)]
 
@@ -82,9 +83,15 @@ class PlannerTests(SimpleTestCase):
         p = plan(55, 55, cycle_used=70)
         self.assertEqual(p.segments[0].kind, "restart")
 
-    def test_late_departure_stays_on_the_same_day(self):
-        p = plan(50, 50, start=23 * 60 + 50)
-        self.assertEqual(p.start_minute, 23 * 60 + 45)
+    def test_departure_is_never_moved_earlier(self):
+        self.assertEqual(round_departure(datetime(2026, 10, 2, 6, 37)), datetime(2026, 10, 2, 6, 45))
+        self.assertEqual(round_departure(datetime(2026, 10, 2, 6, 45)), datetime(2026, 10, 2, 6, 45))
+        self.assertEqual(round_departure(datetime(2026, 10, 2, 6, 45, 30)), datetime(2026, 10, 2, 7, 0))
+        self.assertEqual(round_departure(datetime(2026, 10, 2, 23, 50)), datetime(2026, 10, 3, 0, 0))
+
+    def test_pre_trip_comes_first_when_the_day_starts_with_loading(self):
+        self.assertEqual(kinds(plan(0, 0)), ["pre_trip", "pickup", "dropoff", "post_trip"])
+        self.assertEqual(kinds(plan(0, 55))[:3], ["pre_trip", "pickup", "drive"])
 
     def test_speed_is_capped(self):
         p = plan(0, 700, mph=75)
@@ -137,3 +144,45 @@ class DailyLogTests(SimpleTestCase):
         self.assertTrue(restart_logs)
         after = restart_logs[0]["recap"]
         self.assertLess(after["last_7_days"], 70 * 60 - 60 * 60)
+
+
+def sheet(*entries):
+    """A day of log entries from (status, start, end) tuples."""
+    return {"entries": [{"status": st, "kind": "", "start": a, "end": b} for st, a, b in entries], "miles": 0}
+
+
+class HosCheckTests(SimpleTestCase):
+    def test_assumed_rest_never_completes_a_restart(self):
+        # 69 h used before the trip, a whole day off, then 5 h 15 m of work.
+        logs = [
+            sheet(("off_duty", 0, DAY)),
+            sheet(("on_duty", 0, 60), ("driving", 60, 315), ("off_duty", 315, DAY)),
+        ]
+        check = refresh_logs(logs, 69 * 60)
+        cycle = next(c for c in check["checks"] if c["key"] == "cycle")
+        self.assertFalse(cycle["ok"])
+        self.assertEqual(logs[1]["recap"]["available_tomorrow"], 0)
+
+    def test_34_hours_off_restarts_the_cycle(self):
+        logs = [
+            sheet(("off_duty", 0, DAY)),
+            sheet(("off_duty", 0, 600), ("driving", 600, 900), ("off_duty", 900, DAY)),
+        ]
+        check = refresh_logs(logs, 69 * 60)
+        self.assertTrue(all(c["ok"] for c in check["checks"]))
+        self.assertTrue(logs[1]["recap"]["restart_completed"])
+        self.assertEqual(logs[1]["recap"]["last_7_days"], 300)
+
+    def test_violation_starts_at_the_minute_the_limit_is_passed(self):
+        records = [Record("on_duty", 0, 15), Record("driving", 15, 15 + 12 * 60), Record("off_duty", 15 + 12 * 60, DAY)]
+        check = hos_check(records, 0, HosRules())
+        driving = next(v for v in check["violations"] if v["key"] == "driving")
+        self.assertEqual((driving["start"], driving["end"]), (15 + 11 * 60, 15 + 12 * 60))
+
+    def test_prior_hours_leave_the_8_day_window(self):
+        days = [sheet(("off_duty", 0, 600), ("on_duty", 600, 780), ("off_duty", 780, DAY)) for _ in range(9)]
+        refresh_logs(days, 60 * 60)
+        self.assertEqual(days[6]["recap"]["last_7_days"], 60 * 60 + 7 * 180)
+        self.assertEqual(days[7]["recap"]["last_7_days"], 7 * 180)
+        self.assertEqual(days[7]["recap"]["last_8_days"], 60 * 60 + 8 * 180)
+        self.assertEqual(days[8]["recap"]["last_8_days"], 8 * 180)

@@ -172,8 +172,8 @@ class TripPlanner:
         self.legs = legs
         self.rules = rules or HosRules()
         self.prior_cycle = int(round(max(0.0, min(70.0, cycle_used_hours)) * 60))
-        # Paper logs use 15-minute marks: snap departure to the nearest one on the same day.
-        self.start_minute = min(int(round(start_minute / QUARTER)) * QUARTER, 24 * 60 - QUARTER)
+        # Paper logs use 15-minute marks; never start before the stated departure.
+        self.start_minute = ceil_quarter(start_minute)
         self.segments: list[Segment] = []
         # The driver starts rested: at least 10 hours off before departure.
         self.s = PlanState(t=self.start_minute, cycle_used=self.prior_cycle, rest_streak=self.rules.shift_reset)
@@ -186,6 +186,7 @@ class TripPlanner:
         speeds = []
         for index, leg in enumerate(self.legs):
             speeds.append(self._drive_leg(index, leg))
+            self._start_shift()
             if index == 0:
                 self._work(ON_DUTY, "pickup", r.pickup, f"Pickup at {leg.destination}: loading")
             else:
@@ -254,6 +255,12 @@ class TripPlanner:
             done += miles
         return speed
 
+    def _start_shift(self) -> None:
+        """A duty day starts with the pre-trip inspection, even when it starts
+        with loading rather than driving."""
+        if self.s.shift_start is None:
+            self._work(ON_DUTY, "pre_trip", self.rules.inspection, "Pre-trip inspection")
+
     def _prepare_to_drive(self, remaining_miles: float, speed: float) -> None:
         """Insert whatever rest, break, fuel or inspection the rules require."""
         r = self.rules
@@ -270,7 +277,7 @@ class TripPlanner:
                     self._rest(SLEEPER, "rest", r.shift_reset, f"10-hour break in sleeper berth ({reason} reached)")
                     continue
             if s.shift_start is None:
-                self._work(ON_DUTY, "pre_trip", r.inspection, "Pre-trip inspection")
+                self._start_shift()
                 continue
             fuel_left = r.fuel_interval_miles - s.miles_since_fuel
             if fuel_left < remaining_miles and floor_quarter(fuel_left / speed * 60) < QUARTER:

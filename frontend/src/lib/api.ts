@@ -107,8 +107,14 @@ export interface DailyLog {
     restart_completed: boolean
   }
   violations?: Violation[]
-  edit?: { reason: string; edited_at: string }
+  edit?: LogEditRecord
+  edits?: LogEditRecord[]
   total_mileage?: number
+}
+
+export interface LogEditRecord {
+  reason: string
+  edited_at: string
 }
 
 export interface LogEdit {
@@ -129,6 +135,8 @@ export interface ComplianceCheck {
   unit: 'minutes' | 'miles'
   rule: string
   ok: boolean
+  /** "plan" when the check describes the route plan rather than edited logs. */
+  basis?: 'plan'
 }
 
 export interface RouteLeg {
@@ -143,6 +151,8 @@ export interface RouteLeg {
 export interface Trip {
   id: string
   created_at: string
+  /** Returned once, when the trip is created. Required to edit its logs. */
+  edit_token?: string
   inputs: TripRequest & { current: Place; pickup: Place; dropoff: Place }
   places: { current: Place; pickup: Place; dropoff: Place }
   summary: {
@@ -198,21 +208,76 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
       ...init,
       headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     })
-  } catch {
+  } catch (err) {
+    if (init?.signal?.aborted) throw err
     throw new ApiError('Cannot reach the server. Check your connection and try again.', 0)
   }
-  const body = await response.json().catch(() => ({}))
+
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch (err) {
+    // A request cancelled while the body streams must stay a cancellation.
+    if (init?.signal?.aborted) throw err
+    if (response.ok) throw new ApiError('The server sent an unreadable response. Try again.', response.status)
+    body = {}
+  }
+
   if (!response.ok) {
+    const data = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
     const fields: Record<string, string> = {}
-    if (body.fields) Object.assign(fields, body.fields)
-    for (const [key, value] of Object.entries(body)) {
+    if (data.fields && typeof data.fields === 'object') Object.assign(fields, data.fields)
+    for (const [key, value] of Object.entries(data)) {
       if (key !== 'detail' && key !== 'fields') {
         fields[key] = Array.isArray(value) ? String(value[0]) : typeof value === 'object' ? 'Check this field.' : String(value)
       }
     }
-    throw new ApiError(body.detail ?? 'Something went wrong. Try again.', response.status, fields)
+    const detail = typeof data.detail === 'string' ? data.detail : 'Something went wrong. Try again.'
+    throw new ApiError(detail, response.status, fields)
   }
   return body as T
+}
+
+function assertTrip(value: Trip): Trip {
+  if (!value || typeof value.id !== 'string' || !Array.isArray(value.logs) || !Array.isArray(value.segments)) {
+    throw new ApiError('The server sent an incomplete trip. Try again.', 0)
+  }
+  return value
+}
+
+/*
+  Edit tokens: the server returns a trip's token only to the client that
+  created it. They are kept in this browser so the creator can edit the logs;
+  anyone else with the link gets a read-only view.
+*/
+const TOKENS_KEY = 'trip-planner-edit-tokens'
+
+function readTokens(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TOKENS_KEY) ?? '{}')
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveToken(id: string, token: string) {
+  try {
+    localStorage.setItem(TOKENS_KEY, JSON.stringify({ ...readTokens(), [id]: token }))
+  } catch {
+    /* storage unavailable: the trip stays editable until the page reloads */
+  }
+}
+
+const sessionTokens = new Map<string, string>()
+
+export function editToken(id: string): string | undefined {
+  return sessionTokens.get(id) ?? readTokens()[id]
+}
+
+function editHeaders(id: string): HeadersInit {
+  const token = editToken(id)
+  return token ? { 'X-Edit-Token': token } : {}
 }
 
 const tripCache = new Map<string, Trip>()
@@ -225,34 +290,48 @@ export const api = {
     return request<{ label: string; lat: number; lon: number }>(`/api/places/reverse?lat=${lat}&lon=${lon}`)
   },
   async createTrip(body: TripRequest) {
-    const trip = await request<Trip>('/api/trips', { method: 'POST', body: JSON.stringify(body) })
+    const trip = assertTrip(await request<Trip>('/api/trips', { method: 'POST', body: JSON.stringify(body) }))
+    if (trip.edit_token) {
+      sessionTokens.set(trip.id, trip.edit_token)
+      saveToken(trip.id, trip.edit_token)
+    }
     tripCache.set(trip.id, trip)
     return trip
   },
   async saveLog(id: string, day: number, edit: LogEdit) {
-    const trip = await request<Trip>(`/api/trips/${encodeURIComponent(id)}/logs/${day}`, {
-      method: 'PUT',
-      body: JSON.stringify(edit),
-    })
+    const trip = assertTrip(
+      await request<Trip>(`/api/trips/${encodeURIComponent(id)}/logs/${day}`, {
+        method: 'PUT',
+        body: JSON.stringify(edit),
+        headers: editHeaders(id),
+      }),
+    )
     tripCache.set(trip.id, trip)
     return trip
   },
-  previewLog(id: string, day: number, edit: Omit<LogEdit, 'reason'>, signal?: AbortSignal) {
-    return request<Trip>(`/api/trips/${encodeURIComponent(id)}/logs/${day}/preview`, {
-      method: 'POST',
-      body: JSON.stringify(edit),
-      signal,
-    })
+  async previewLog(id: string, day: number, edit: Omit<LogEdit, 'reason'>, signal?: AbortSignal) {
+    return assertTrip(
+      await request<Trip>(`/api/trips/${encodeURIComponent(id)}/logs/${day}/preview`, {
+        method: 'POST',
+        body: JSON.stringify(edit),
+        headers: editHeaders(id),
+        signal,
+      }),
+    )
   },
   async revertLog(id: string, day: number) {
-    const trip = await request<Trip>(`/api/trips/${encodeURIComponent(id)}/logs/${day}`, { method: 'DELETE' })
+    const trip = assertTrip(
+      await request<Trip>(`/api/trips/${encodeURIComponent(id)}/logs/${day}`, { method: 'DELETE', headers: editHeaders(id) }),
+    )
     tripCache.set(trip.id, trip)
     return trip
   },
-  async getTrip(id: string) {
-    const cached = tripCache.get(id)
-    if (cached) return cached
-    const trip = await request<Trip>(`/api/trips/${encodeURIComponent(id)}`)
+  /** The trip as last seen in this session, for an instant first render. */
+  cachedTrip(id: string) {
+    return tripCache.get(id)
+  },
+  async getTrip(id: string, signal?: AbortSignal) {
+    const trip = assertTrip(await request<Trip>(`/api/trips/${encodeURIComponent(id)}`, { signal }))
     tripCache.set(trip.id, trip)
     return trip
   },

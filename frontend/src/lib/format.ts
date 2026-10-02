@@ -1,4 +1,5 @@
-const DAY = 24 * 60
+/** Minutes in a log day. Trip times are minutes from midnight of the first day. */
+export const DAY = 24 * 60
 
 const dateFmt = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
 const longDateFmt = new Intl.DateTimeFormat('en-US', {
@@ -57,6 +58,14 @@ export function formatHours(minutes: number) {
   return m ? `${h}h ${m}m` : `${h}h`
 }
 
+/** Minute of a log day as a clock time: 375 -> "6:15 AM", 1440 -> "Midnight". */
+export function formatMinuteOfDay(minute: number) {
+  if (minute >= DAY) return 'Midnight'
+  const h = Math.floor(minute / 60)
+  const m = minute % 60
+  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`
+}
+
 /** 135 -> "2:15", used on the log grid and for HOS totals. */
 export function formatHM(minutes: number) {
   const sign = minutes < 0 ? '-' : ''
@@ -72,9 +81,6 @@ export function formatNumber(value: number) {
   return decimalFmt.format(value)
 }
 
-export function hoursLabel(minutes: number) {
-  return `${decimalFmt.format(minutes / 60)} h`
-}
 
 /** Next quarter hour from now, as a datetime-local value. */
 export function defaultDeparture(now = new Date()) {

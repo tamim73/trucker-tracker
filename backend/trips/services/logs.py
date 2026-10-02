@@ -27,6 +27,11 @@ DAY = 24 * 60
 
 Labeler = Callable[[tuple[float, float]], str]
 
+# Last trip day (0-based) on which hours used before departure can still fall
+# inside the 7-day and the 8-day window.
+PRIOR_DAYS_IN_7 = 6
+PRIOR_DAYS_IN_8 = 7
+
 HOS_CHECKS = {
     "driving": ("11-hour driving limit", "395.3(a)(3)"),
     "window": ("14-hour duty window", "395.3(a)(2)"),
@@ -206,16 +211,19 @@ def _worked(records: Iterable[Record], lo: int, hi: int) -> int:
 def _recap(d: int, records: list[Record], prior: int, restarts: list[int], rules: HosRules) -> dict:
     """70-hour / 8-day recap at the end of day ``d``.
 
-    Hours used before the trip stay inside the window for the whole trip
-    (conservative, since their exact days are unknown) until a 34-hour
-    restart clears the cycle. Work before the latest restart never counts."""
+    The exact days of the hours used before the trip are unknown, so they are
+    assumed to be as late as possible (up to the departure day). They stay in
+    the 7-day total through day 7 of the trip and in the 8-day total through
+    day 8, unless a 34-hour restart clears them first. Work before the latest
+    restart never counts."""
     day_start, day_end = d * DAY, (d + 1) * DAY
     done = [t for t in restarts if t <= day_end]
     cutoff = max(done) if done else None
-    carry = prior if cutoff is None else 0
     floor = cutoff if cutoff is not None else -10**9
-    last7 = carry + _worked(records, max((d - 6) * DAY, floor), day_end)
-    last8 = carry + _worked(records, max((d - 7) * DAY, floor), day_end)
+    carry7 = prior if cutoff is None and d <= PRIOR_DAYS_IN_7 else 0
+    carry8 = prior if cutoff is None and d <= PRIOR_DAYS_IN_8 else 0
+    last7 = carry7 + _worked(records, max((d - 6) * DAY, floor), day_end)
+    last8 = carry8 + _worked(records, max((d - 7) * DAY, floor), day_end)
     return {
         "on_duty_today": _worked(records, day_start, day_end),
         "last_7_days": last7,
@@ -227,11 +235,15 @@ def _recap(d: int, records: list[Record], prior: int, restarts: list[int], rules
 
 def hos_check(records: list[Record], prior_cycle: int, rules: HosRules) -> dict:
     """Worst value for each limit plus every period of driving that breaks one.
-    The driver is assumed rested before the first record."""
+
+    The driver is assumed rested before the first record (a fresh 11/14-hour
+    shift), but that assumed rest never counts toward a 34-hour restart."""
     shift_start = None
     shift_driving = since_break = non_driving = 0
-    rest = rules.shift_reset
+    rest = rules.shift_reset  # includes the assumed rest, for the 10-hour reset
+    actual_rest = 0  # only logged rest, for the 34-hour restart
     cycle = prior_cycle
+    prior_counted = prior_cycle > 0
     worst = {key: 0 for key in HOS_CHECKS}
     violations: list[dict] = []
 
@@ -244,16 +256,21 @@ def hos_check(records: list[Record], prior_cycle: int, rules: HosRules) -> dict:
 
     for r in records:
         dur = r.duration
+        if prior_counted and r.start >= (PRIOR_DAYS_IN_8 + 1) * DAY:
+            cycle -= prior_cycle  # pre-trip hours have left the 8-day window
+            prior_counted = False
         if r.status in WORK_STATUSES:
             if shift_start is None:
                 shift_start = r.start
-            rest = 0
+            rest = actual_rest = 0
         else:
             rest += dur
+            actual_rest += dur
             if rest >= rules.shift_reset:
                 shift_start, shift_driving, since_break = None, 0, 0
-            if rest >= rules.cycle_restart:
+            if actual_rest >= rules.cycle_restart:
                 cycle = 0
+                prior_counted = False
 
         if r.status == DRIVING:
             non_driving = 0

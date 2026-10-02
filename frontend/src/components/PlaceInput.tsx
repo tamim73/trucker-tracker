@@ -16,58 +16,52 @@ interface Props {
 export function PlaceInput({ name, label, value, onChange, placeholder, error, trailing, busy }: Props) {
   const id = useId()
   const listId = `${id}-list`
-  const [open, setOpen] = useState(false)
-  const [results, setResults] = useState<Place[]>([])
+  // Text the user typed. Values set from outside (sample trip, geolocation,
+  // prefill) never start a search or open the list.
+  const [query, setQuery] = useState<string | null>(null)
+  const [focused, setFocused] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
+  const [found, setFound] = useState<{ term: string; results: Place[]; error: string } | null>(null)
   const [active, setActive] = useState(-1)
-  const [loading, setLoading] = useState(false)
-  const [searchError, setSearchError] = useState('')
-  const [typed, setTyped] = useState(false)
   const resolved = value.lat != null && value.lon != null
 
+  const term = query?.trim() ?? ''
+  const searching = term.length >= 2
   useEffect(() => {
-    if (!typed) return
-    const query = value.label.trim()
-    if (query.length < 2) {
-      setResults([])
-      setLoading(false)
-      return
-    }
+    if (!searching) return
     const controller = new AbortController()
-    setLoading(true)
     const timer = window.setTimeout(() => {
       api
-        .searchPlaces(query, controller.signal)
+        .searchPlaces(term, controller.signal)
         .then(({ results }) => {
-          setResults(results)
+          setFound({ term, results, error: '' })
           setActive(results.length ? 0 : -1)
-          setSearchError('')
-          setOpen(true)
         })
         .catch((err) => {
           if (controller.signal.aborted) return
-          setResults([])
-          setSearchError(err.message)
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setLoading(false)
+          setFound({ term, results: [], error: err.message })
         })
     }, 220)
     return () => {
       controller.abort()
       window.clearTimeout(timer)
     }
-  }, [value.label, typed])
+  }, [term, searching])
+
+  const current = searching && found?.term === term ? found : null
+  const results = current?.results ?? []
+  const loading = searching && !current
+  const searchError = current?.error ?? ''
+  const showList = focused && searching && !loading && !dismissed && !searchError
 
   function choose(place: Place) {
-    setTyped(false)
+    setQuery(null)
     onChange({ label: place.label, lat: place.lat, lon: place.lon })
-    setOpen(false)
-    setResults([])
   }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (!open || results.length === 0) {
-      if (event.key === 'ArrowDown' && results.length) setOpen(true)
+    if (!showList || results.length === 0) {
+      if (event.key === 'ArrowDown' && results.length) setDismissed(false)
       return
     }
     if (event.key === 'ArrowDown') {
@@ -80,11 +74,10 @@ export function PlaceInput({ name, label, value, onChange, placeholder, error, t
       event.preventDefault()
       choose(results[active])
     } else if (event.key === 'Escape') {
-      setOpen(false)
+      setDismissed(true)
     }
   }
 
-  const showList = open && (results.length > 0 || (!loading && value.label.trim().length >= 2 && typed))
   const errorText = error || searchError
 
   return (
@@ -112,21 +105,25 @@ export function PlaceInput({ name, label, value, onChange, placeholder, error, t
             placeholder={placeholder}
             value={value.label}
             onChange={(e) => {
-              setTyped(true)
+              setQuery(e.target.value)
+              setDismissed(false)
               onChange({ label: e.target.value, lat: null, lon: null })
             }}
-            onFocus={() => results.length && setOpen(true)}
-            onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
             onKeyDown={onKeyDown}
             className="w-full min-w-0 truncate bg-transparent text-[16px] leading-6 text-ink outline-none placeholder:text-mute focus-visible:outline-none"
           />
         </label>
-        <span className="flex shrink-0 items-center" aria-hidden={!busy && !loading}>
+        <span className="flex shrink-0 items-center">
           {loading || busy ? (
-            <SpinnerGapIcon size={18} className="mr-2 animate-spin text-mute" aria-label="Searching" />
+            <SpinnerGapIcon size={18} className="mr-2 animate-spin text-mute" aria-hidden />
           ) : resolved ? (
-            <CheckIcon size={18} weight="bold" className="mr-2 text-accent" aria-label="Location confirmed" />
+            <CheckIcon size={18} weight="bold" className="mr-2 text-accent" aria-hidden />
           ) : null}
+          <span className="sr-only" aria-live="polite">
+            {loading || busy ? 'Searching' : resolved ? `${label} confirmed` : ''}
+          </span>
           {trailing}
         </span>
       </div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { TripForm, type FormState } from '../components/TripForm'
 import { LazyMap as TripMap } from '../components/LazyMap'
@@ -9,9 +9,15 @@ import { defaultDeparture } from '../lib/format'
 const DRIVER_KEY = 'trip-planner-driver'
 
 
+/** Driver details saved by the last trip, keeping only known text fields. */
 function storedDriver(): DriverDetails {
   try {
-    return { ...EMPTY_DRIVER, ...JSON.parse(localStorage.getItem(DRIVER_KEY) ?? '{}') }
+    const saved = JSON.parse(localStorage.getItem(DRIVER_KEY) ?? '{}') as Record<string, unknown>
+    const driver = { ...EMPTY_DRIVER }
+    for (const key of Object.keys(EMPTY_DRIVER) as (keyof DriverDetails)[]) {
+      if (typeof saved?.[key] === 'string') driver[key] = saved[key] as string
+    }
+    return driver
   } catch {
     return EMPTY_DRIVER
   }
@@ -58,14 +64,25 @@ export function PlannerPage() {
   }))
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<ApiError | null>(null)
+  const touched = useRef(false)
 
-  // "Edit trip" opens the planner prefilled from an existing plan.
+  // Any edit clears the last server error, which may no longer apply.
+  const updateForm: Dispatch<SetStateAction<FormState>> = useCallback((action) => {
+    touched.current = true
+    setForm(action)
+    setError(null)
+  }, [])
+
+  // "Edit trip" opens the planner prefilled from an existing plan, unless the
+  // driver has already started typing.
   const fromId = params.get('from')
   useEffect(() => {
     if (!fromId) return
+    const controller = new AbortController()
     api
-      .getTrip(fromId)
+      .getTrip(fromId, controller.signal)
       .then((trip) => {
+        if (touched.current) return
         const i = trip.inputs
         setForm({
           current: i.current,
@@ -76,8 +93,20 @@ export function PlannerPage() {
           driver: { ...EMPTY_DRIVER, ...(i.driver ?? {}) },
         })
       })
-      .catch(() => undefined)
+      .catch((err) => {
+        if (!controller.signal.aborted) setError(err instanceof ApiError ? err : null)
+      })
+    return () => controller.abort()
   }, [fromId])
+
+  function forgetDriver() {
+    try {
+      localStorage.removeItem(DRIVER_KEY)
+    } catch {
+      /* storage unavailable: nothing was saved */
+    }
+    updateForm((v) => ({ ...v, driver: EMPTY_DRIVER }))
+  }
 
   useEffect(() => {
     document.title = 'Plan a Trip - HOS Trip Planner Demo'
@@ -116,15 +145,13 @@ export function PlannerPage() {
         </div>
         <TripForm
           value={form}
-          onChange={setForm}
+          onChange={updateForm}
+          onForgetDriver={forgetDriver}
           onSubmit={submit}
           submitting={submitting}
           serverError={error?.message}
           fieldErrors={error?.fields}
-          onLoadSample={() => {
-            setError(null)
-            setForm(sampleTrip())
-          }}
+          onLoadSample={() => updateForm(sampleTrip())}
         />
         <Assumptions />
       </div>

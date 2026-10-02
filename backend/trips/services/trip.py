@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .geo import GeoError, geocode, label_many, route_trip
 from .hos import DRIVING, ON_DUTY, OFF_DUTY, SLEEPER, HosRules, TripPlanner
-from .logs import build_daily_logs, compliance_report, full_timeline
+from .logs import build_daily_logs, compliance_report, full_timeline, refresh_logs
 
 ROLE_ORDER = ("current", "pickup", "dropoff")
 
@@ -17,6 +17,15 @@ def resolve_place(place: dict) -> dict:
         return {"label": place["label"], "lat": place["lat"], "lon": place["lon"]}
     found = geocode(place["label"])
     return {"label": found["label"], "lat": found["lat"], "lon": found["lon"]}
+
+
+def round_departure(departure: datetime) -> datetime:
+    """Rounds up to the next 15-minute mark, the paper log's resolution, so the
+    plan never starts before the time the driver gave. May roll to the next day."""
+    base = departure.replace(second=0, microsecond=0)
+    if base != departure:
+        base += timedelta(minutes=1)
+    return base + timedelta(minutes=(-base.minute) % 15)
 
 
 def _key(coord: tuple[float, float]) -> tuple[float, float]:
@@ -37,7 +46,7 @@ def plan_trip(data: dict) -> dict:
         raise PlaceErrors(errors)
 
     legs, estimated = route_trip(places["current"], places["pickup"], places["dropoff"])
-    departure: datetime = data["departure"]
+    departure = round_departure(data["departure"])
     start_minute = departure.hour * 60 + departure.minute
     plan = TripPlanner(legs, data["cycle_used_hours"], start_minute, rules).plan()
     timeline = full_timeline(plan)
@@ -126,7 +135,7 @@ def plan_trip(data: dict) -> dict:
         "segments": segments,
         "logs": logs,
         "compliance": compliance,
-        "violations": [],
+        "violations": refresh_logs(logs, plan.prior_cycle_minutes, rules)["violations"],
         "edited": False,
         "rules": {
             "max_driving": rules.max_driving,
