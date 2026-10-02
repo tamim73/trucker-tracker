@@ -76,11 +76,12 @@ Other assumptions: the driver starts rested, does a 15-minute pre-trip inspectio
 
 On the logs page, **Edit Log** opens the sheet for changes:
 
-- Drag across a row of the grid to put that period on that duty status, the way a driver draws on paper.
+- Click a row of the grid to set 15 minutes to that duty status, or drag across it for a longer period, the way a driver draws on paper.
 - Drag a piece of the line up or down (or focus it and press the up and down arrows) to move it to another duty status.
 - Drag a round handle sideways (or use the left and right arrows) to move a change of duty status. Dropping it on the next change removes the piece in between. Times snap to 15 minutes.
 - Neighbors on the same duty status join automatically, so the line only has a point where it changes rows.
-- The entry list below the sheet edits the same data with plain form fields: status, start time, location and note, plus remove.
+- Click a remark under the grid to edit it in place: the location once for the label, and a remark for each change of duty status it covers. A remark replaces the standard activity text ("Pickup, loading"); leave it empty to keep the standard text.
+- The entry list below the sheet edits the same data with plain form fields: status, start time, location and remark, plus add and remove.
 - The header and shipping fields are typed straight onto the sheet: From, To, total miles driving, total mileage, truck and trailer numbers, carrier, office and terminal addresses, driver, co-driver, shipping document and commodity. From, To and mileage are per day; the rest apply to every sheet.
 - Undo and redo (Ctrl+Z, Shift+Ctrl+Z) for the duty status line.
 

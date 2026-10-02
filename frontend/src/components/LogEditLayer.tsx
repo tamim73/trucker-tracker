@@ -57,17 +57,13 @@ type Drag = { type: 'boundary'; minute: number } | { type: 'segment'; status: Du
 
 /**
  * Drawing tools over the grid:
- * - drag across a row to put that period on that duty status,
+ * - click a row to set 15 minutes to that status, or drag across it for a longer period,
  * - drag a piece of the line up or down to change its status,
  * - drag a round handle sideways to move a change (onto another change removes the piece between).
  * Handles and pieces also work with the arrow keys. Times snap to 15 minutes.
  */
-/** Pointer travel (screen px) before a press on the grid counts as drawing. */
-const DRAW_THRESHOLD = 4
-
 export function EditLayer({ entries, editing }: { entries: LogEntry[]; editing: SheetEditing }) {
-  const [paint, setPaint] = useState<{ status: DutyStatus; anchor: number; current: number; moved: boolean } | null>(null)
-  const pressX = useRef(0)
+  const [paint, setPaint] = useState<{ status: DutyStatus; anchor: number; current: number } | null>(null)
   const [hover, setHover] = useState<number | null>(null)
   const [drag, setDrag] = useState<Drag | null>(null)
   const layer = useRef<SVGGElement>(null)
@@ -150,18 +146,17 @@ export function EditLayer({ entries, editing }: { entries: LogEntry[]; editing: 
           onPointerDown={(e) => {
             e.currentTarget.setPointerCapture(e.pointerId)
             const m = minuteAt(e)
-            pressX.current = e.clientX
-            setPaint({ status, anchor: m, current: m, moved: false })
+            setPaint({ status, anchor: m, current: m })
           }}
           onPointerMove={(e) => {
             const m = minuteAt(e)
             setHover(m)
-            if (paint) setPaint({ ...paint, current: m, moved: paint.moved || Math.abs(e.clientX - pressX.current) >= DRAW_THRESHOLD })
+            if (paint) setPaint({ ...paint, current: m })
           }}
           onPointerLeave={() => setHover(null)}
           onPointerUp={() => {
-            // A plain click does nothing; drawing needs a drag.
-            if (paint?.moved && range) {
+            // A click sets one 15-minute block to the row's status; a drag sets a longer period.
+            if (paint && range) {
               editing.onEditStart()
               editing.onPaint(paint.status, range.from, range.to)
               editing.onEditEnd()
@@ -182,7 +177,7 @@ export function EditLayer({ entries, editing }: { entries: LogEntry[]; editing: 
         </g>
       )}
 
-      {paint?.moved && range && (
+      {paint && range && (
         <g pointerEvents="none">
           <rect
             x={x(range.from)}

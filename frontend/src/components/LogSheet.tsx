@@ -1,6 +1,6 @@
 import { memo, type ReactNode } from 'react'
-import type { DailyLog, DriverDetails, DutyStatus, LogRemark, SegmentKind } from '../lib/api'
-import { DUTY_ORDER, NOTE_KINDS } from '../lib/duty'
+import type { DailyLog, DriverDetails, DutyStatus, LogRemark } from '../lib/api'
+import { DUTY_ORDER, remarkText } from '../lib/duty'
 import { formatHM, formatNumber } from '../lib/format'
 import { DANGER, FAINT, GB, GT, GX, H, HOUR, PAPER, PEN, PRINT, RB, RH, RULE, rowY, TX, W, x } from '../lib/sheetGeometry'
 import { EditLayer, type SheetEditing } from './LogEditLayer'
@@ -13,20 +13,6 @@ import { EditLayer, type SheetEditing } from './LogEditLayer'
 */
 
 
-const ACTIVITY: Record<SegmentKind, [string, string]> = {
-  pre_trip: ['Pre-trip inspection', 'Pre-trip'],
-  drive: ['Driving', 'Driving'],
-  pickup: ['Pickup, loading', 'Pickup'],
-  dropoff: ['Drop-off, unloading', 'Drop-off'],
-  post_trip: ['Post-trip inspection', 'Post-trip'],
-  fuel: ['Fuel', 'Fuel'],
-  break: ['30-min break', 'Break'],
-  rest: ['10-hr break (SB)', '10-hr SB'],
-  restart: ['34-hr restart', 'Restart'],
-  off_duty: ['Off duty', 'Off duty'],
-  sleeper: ['Sleeper berth', 'SB'],
-  on_duty: ['On duty', 'On duty'],
-}
 const VIOLATION_LABEL: Record<string, string> = {
   driving: 'Over 11 hr driving',
   window: 'Past 14-hr window',
@@ -67,6 +53,7 @@ interface Props {
   highlight?: number | null
   editing?: SheetEditing
   header?: HeaderEditing
+  remarks?: RemarkEditing
 }
 
 interface FieldEdit {
@@ -105,15 +92,18 @@ function SheetInput({ x, y, width, height, edit, size = 15, align = 'left', weig
   )
 }
 
-interface RemarkGroup {
+export interface RemarkGroup {
   minute: number
+  /** Start minutes of every change of duty status the label covers. */
+  minutes: number[]
   location: string
   labels: [string, string][]
 }
 
-function remarkLabel(r: LogRemark): [string, string] {
-  if (NOTE_KINDS.includes(r.kind) && r.note) return [r.note, r.note]
-  return ACTIVITY[r.kind] ?? [r.note, r.note]
+/** Remark labels become buttons while editing; selecting one opens its editor. */
+export interface RemarkEditing {
+  selected: number | null
+  onSelect: (group: RemarkGroup, anchor: { x: number; y: number }) => void
 }
 
 /** One label per place: changes at the same location within two hours share it. */
@@ -121,11 +111,12 @@ function groupRemarks(remarks: LogRemark[]): RemarkGroup[] {
   const groups: RemarkGroup[] = []
   for (const r of remarks) {
     const last = groups[groups.length - 1]
-    const label = remarkLabel(r)
+    const label = remarkText(r)
     if (last && last.location === r.location && r.minute - last.minute <= 120) {
+      last.minutes.push(r.minute)
       if (!last.labels.some((l) => l[0] === label[0])) last.labels.push(label)
     } else {
-      groups.push({ minute: r.minute, location: r.location, labels: [label] })
+      groups.push({ minute: r.minute, minutes: [r.minute], location: r.location, labels: [label] })
     }
   }
   return groups
@@ -199,7 +190,7 @@ function Box({ x1, y1, w, h, value, label, edit }: { x1: number; y1: number; w: 
   )
 }
 
-export const LogSheet = memo(function LogSheet({ log, driver, dayCount, animate = true, highlight, editing, header }: Props) {
+export const LogSheet = memo(function LogSheet({ log, driver, dayCount, animate = true, highlight, editing, header, remarks }: Props) {
   const dayEdit = (field: DayField, label: string, numeric = false): FieldEdit | undefined =>
     header && { value: header.day[field], onChange: (v) => header.onDayChange(field, v), label, numeric }
   const driverEdit = (field: keyof DriverDetails, label: string): FieldEdit | undefined =>
@@ -438,20 +429,54 @@ export const LogSheet = memo(function LogSheet({ log, driver, dayCount, animate 
           />
         )
       })}
-      {placed.map((g, i) => (
-        <g key={i}>
-          <line x1={g.tick} x2={g.tick} y1={GB} y2={RB} stroke={PEN} strokeWidth={0.8} strokeDasharray="2 3" opacity={0.55} />
-          <path d={`M${g.tick},${RB}L${g.lx},${RB + 10}`} stroke={PEN} strokeWidth={1.2} fill="none" />
+      {placed.map((g, i) => {
+        const label = (
           <text transform={`translate(${g.lx + 4} ${RB + 14}) rotate(-90)`} textAnchor="end" fontSize={11}>
             <tspan fill={PEN} fontWeight={600}>
-              {clip(g.location)}
+              {clip(g.location || 'Add location')}
             </tspan>
             <tspan x={0} dy={13} fill={PRINT}>
               {activityText(g.labels)}
             </tspan>
           </text>
-        </g>
-      ))}
+        )
+        const select = () => remarks?.onSelect(g, { x: g.lx, y: RB })
+        return (
+          <g key={i}>
+            <line x1={g.tick} x2={g.tick} y1={GB} y2={RB} stroke={PEN} strokeWidth={0.8} strokeDasharray="2 3" opacity={0.55} />
+            <path d={`M${g.tick},${RB}L${g.lx},${RB + 10}`} stroke={PEN} strokeWidth={1.2} fill="none" />
+            {remarks ? (
+              <g
+                role="button"
+                tabIndex={0}
+                aria-label={`Edit remark: ${g.location}, ${g.labels.map((l) => l[0]).join(', ')}`}
+                aria-expanded={remarks.selected === g.minute}
+                className="log-remark"
+                style={{ cursor: 'pointer', outline: 'none' }}
+                onClick={select}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    select()
+                  }
+                }}
+              >
+                <rect
+                  className={`log-remark-box ${remarks.selected === g.minute ? 'is-selected' : ''}`}
+                  x={g.lx - 11}
+                  y={RB + 8}
+                  width={30}
+                  height={188}
+                  rx={6}
+                />
+                {label}
+              </g>
+            ) : (
+              label
+            )}
+          </g>
+        )
+      })}
 
       {/* Shipping documents and instructions */}
       <text x={24} y={672} fill={PRINT} fontSize={12.5} fontWeight={700}>

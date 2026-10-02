@@ -319,3 +319,22 @@
   background: #fefefd;
   box-shadow: inset 0 0 0 2px #1f3a93;
 }
+
+/* Remark labels are buttons while a log is being edited. */
+.log-remark-box {
+  fill: transparent;
+  stroke: transparent;
+  transition: fill 120ms, stroke 120ms;
+}
+.log-remark:hover .log-remark-box {
+  fill: rgb(31 58 147 / 0.06);
+  stroke: rgb(31 58 147 / 0.35);
+  stroke-dasharray: 3 3;
+}
+.log-remark-box.is-selected,
+.log-remark:focus-visible .log-remark-box {
+  fill: rgb(31 58 147 / 0.1);
+  stroke: #1f3a93;
+  stroke-width: 1.5;
+  stroke-dasharray: none;
+}

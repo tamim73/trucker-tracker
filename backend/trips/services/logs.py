@@ -105,7 +105,9 @@ def build_daily_logs(
                     "kind": seg.kind,
                     "start": start - day_start,
                     "end": end - day_start,
-                    "note": seg.note,
+                    # Planned entries print their activity from "kind"; "note"
+                    # holds only what the driver writes, which replaces it.
+                    "note": "",
                     "location": label(seg.coord_start if seg.start >= day_start else _coord_at(seg, day_start)),
                     "miles": round(seg_miles, 1),
                 }

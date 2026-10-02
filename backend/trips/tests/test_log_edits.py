@@ -147,3 +147,13 @@ class LogEditApiTests(TestCase):
         data = self.put(self.shifted()).json()
         basis = {c["key"]: c.get("basis") for c in data["compliance"]}
         self.assertEqual((basis["fuel"], basis["dock"], basis["driving"]), ("plan", "plan", None))
+
+    def test_planned_entries_have_no_note_and_driver_remarks_are_kept(self):
+        planned = self.trip["logs"][0]
+        self.assertTrue(all(e["note"] == "" for e in planned["entries"]))
+        entries = entries_of(planned)
+        pickup = next(i for i, e in enumerate(entries) if e["kind"] == "pickup")
+        entries[pickup] = {**entries[pickup], "note": "Loading at dock 4", "location": "Indianapolis Yard, IN"}
+        log = self.put(entries).json()["logs"][0]
+        remark = next(r for r in log["remarks"] if r["minute"] == entries[pickup]["start"])
+        self.assertEqual((remark["note"], remark["location"]), ("Loading at dock 4", "Indianapolis Yard, IN"))

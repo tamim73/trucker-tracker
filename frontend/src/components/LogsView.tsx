@@ -9,7 +9,7 @@ import {
   SpinnerGapIcon,
   WarningCircleIcon,
 } from '@phosphor-icons/react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Link, useBlocker, useSearchParams } from 'react-router-dom'
 import { useLogDraft } from '../hooks/useLogDraft'
@@ -18,8 +18,10 @@ import { EMPTY_DRIVER } from '../lib/driver'
 import { DUTY, DUTY_ORDER, entryLabel } from '../lib/duty'
 import { formatDay, formatHM, formatLongDate, formatMiles, formatMinuteOfDay } from '../lib/format'
 import { draftLog, totals, withLocations } from '../lib/logEdit'
+import { H, W } from '../lib/sheetGeometry'
 import { LogEditor } from './LogEditor'
-import { LogSheet } from './LogSheet'
+import { LogSheet, type RemarkEditing, type RemarkGroup } from './LogSheet'
+import { RemarkEditor } from './RemarkEditor'
 
 interface Props {
   trip: Trip
@@ -67,6 +69,18 @@ function LogsWorkspace({ trip, onTripChange }: Props) {
   const printing = usePrinting()
   const d = useLogDraft(trip, index, onTripChange)
   const { draft, editing } = d
+  const [remark, setRemark] = useState<{ group: RemarkGroup; x: number; y: number } | null>(null)
+  const closeRemark = useCallback(() => setRemark(null), [])
+  const remarkEditing: RemarkEditing | undefined = useMemo(
+    () =>
+      editing
+        ? {
+            selected: remark?.group.minute ?? null,
+            onSelect: (group, anchor) => setRemark({ group, ...anchor }),
+          }
+        : undefined,
+    [editing, remark],
+  )
 
   useEffect(() => {
     const current = tabs.current?.querySelector<HTMLElement>('[aria-current="page"]')
@@ -147,7 +161,10 @@ function LogsWorkspace({ trip, onTripChange }: Props) {
         {!editing && (
           <div className="flex gap-2 self-start sm:self-auto">
             {canEdit && (
-              <button type="button" className="btn btn-subtle" onClick={() => d.start(log, driver)}>
+              <button type="button" className="btn btn-subtle" onClick={() => {
+                  setRemark(null)
+                  d.start(log, driver)
+                }}>
                 <PencilSimpleIcon size={18} weight="bold" aria-hidden />
                 Edit Log
               </button>
@@ -206,7 +223,7 @@ function LogsWorkspace({ trip, onTripChange }: Props) {
         <div className="no-print sticky top-16 z-20 -mx-2 flex flex-col gap-3 rounded-2xl border border-hairline bg-surface/95 px-4 py-3 shadow-float backdrop-blur-md sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <p className="text-[15px] font-semibold">Editing Day {index + 1}</p>
-            <p className="text-[13px] text-body">Drag across a row to draw that duty status. Drag a round handle to move a change.</p>
+            <p className="text-[13px] text-body">Click or drag across a row to draw that duty status. Drag a round handle to move a change.</p>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             <button type="button" className="icon-btn" onClick={undo} disabled={!d.canUndo} aria-label="Undo" title="Undo (Ctrl+Z)">
@@ -263,7 +280,7 @@ function LogsWorkspace({ trip, onTripChange }: Props) {
             editing ? 'border-ink ring-4 ring-ink/10' : 'border-hairline'
           }`}
         >
-          <div className="min-w-[880px]">
+          <div className="relative min-w-[880px]">
             <LogSheet
               key={log.date}
               log={shown}
@@ -273,7 +290,21 @@ function LogsWorkspace({ trip, onTripChange }: Props) {
               animate={!editing}
               editing={d.sheetEditing}
               header={d.header}
+              remarks={remarkEditing}
             />
+            {draft && remark && (
+              <RemarkEditor
+                key={remark.group.minute}
+                entries={draft.entries}
+                minutes={remark.group.minutes}
+                onChange={(entries) => d.updateDraft({ ...draft, entries })}
+                onSnapshot={d.snapshot}
+                onClose={closeRemark}
+                left={((remark.x < W * 0.6 ? remark.x + 24 : remark.x - 16) / W) * 100}
+                top={((remark.y + 8) / H) * 100}
+                align={remark.x < W * 0.6 ? 'left' : 'right'}
+              />
+            )}
           </div>
         </div>
         <p className="text-[13px] text-body sm:hidden">

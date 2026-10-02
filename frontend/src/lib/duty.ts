@@ -55,13 +55,31 @@ export function kindInfo(kind: string): { title: string; icon: Icon } {
   return KIND[kind as SegmentKind] ?? UNKNOWN_KIND
 }
 
-/** Kinds created by hand in the log editor; their note names the activity. */
-export const NOTE_KINDS: SegmentKind[] = ['off_duty', 'sleeper', 'on_duty']
+/** How each activity is written in the log remarks: [full, short]. */
+export const REMARK_ACTIVITY: Record<SegmentKind, [string, string]> = {
+  pre_trip: ['Pre-trip inspection', 'Pre-trip'],
+  drive: ['Driving', 'Driving'],
+  pickup: ['Pickup, loading', 'Pickup'],
+  dropoff: ['Drop-off, unloading', 'Drop-off'],
+  post_trip: ['Post-trip inspection', 'Post-trip'],
+  fuel: ['Fuel', 'Fuel'],
+  break: ['30-min break', 'Break'],
+  rest: ['10-hr break (SB)', '10-hr SB'],
+  restart: ['34-hr restart', 'Restart'],
+  off_duty: ['Off duty', 'Off duty'],
+  sleeper: ['Sleeper berth', 'SB'],
+  on_duty: ['On duty', 'On duty'],
+}
 
-/** What an entry is called in lists: the driver's note for hand-made entries, otherwise its activity. */
+/** Remark text for an entry: what the driver wrote, otherwise its activity. */
+export function remarkText(entry: Pick<LogEntry, 'kind' | 'note'>): [string, string] {
+  if (entry.note) return [entry.note, entry.note]
+  return REMARK_ACTIVITY[entry.kind] ?? ['Duty status change', 'Change']
+}
+
+/** What an entry is called in lists. */
 export function entryLabel(entry: Pick<LogEntry, 'kind' | 'note'>) {
-  if (NOTE_KINDS.includes(entry.kind) && entry.note) return entry.note
-  return entry.kind === 'drive' ? 'Driving' : kindInfo(entry.kind).title
+  return entry.note || (entry.kind === 'drive' ? 'Driving' : kindInfo(entry.kind).title)
 }
 
 export function stopTitle(segment: Segment) {
